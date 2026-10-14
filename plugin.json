@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "arena",
+  "version": "0.1.0",
+  "description": "Explore and revise persistent editorial artifacts from Codex and ChatGPT.",
+  "author": { "name": "Matheus Borges", "url": "https://github.com/MathBorgess" },
+  "repository": "https://github.com/MathBorgess/arena",
+  "keywords": ["editorial", "artifacts", "mcp"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Arena",
+        "shortDescription": "Explore e revise textos com contexto persistente",
+        "longDescription": "Visualize artefatos, compare propostas e leve suas interações ao agente no próprio harness.",
+        "developerName": "Matheus Borges",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"]
+      }
+    }
+  }
+}
