@@ -32,7 +32,7 @@ All requests use snake_case JSON. Every mutation takes `workspace_id` and `idemp
 - `human.invite_member`: name,kind (`human`/`agent`),role (`editor`/`reviewer`), expected_revision (=workspace membership revision). Returns `{actor,token,member_revision,workspace_revision}`. Owner-only; credentials displayed once by CLI/UI, never in context or logs. Agent-kind cannot approve.
 - `human.revoke_member`: member_id,expected_revision (=member revision),reason. Returns `{member_id,revision}`; owner-only; authenticate/use after revocation fails.
 - `human.integration_status`: workspace_id. Returns `{integrations:[{provider,account,state,capabilities,scopes,last_verified,limitations,pagination,costs,unavailable_reason}]}`. Social native APIs unavailable; export importer accurately reports tested export path; native client configured/authenticated/read verified/operation tested remain distinct and never inferred from SDK fixtures.
-- `human.record_verification`: provider (`codex`/`claude`),expected_revision (adapter record revision),stage,evidence. Returns adapter status. Explicit owner attestation only, never automatic provider claim.
+- `human.record_verification`: provider (`codex`/`chatgpt`),expected_revision (adapter record revision),stage,evidence. Returns adapter status. Explicit owner attestation only, never automatic provider claim.
 - `human.review_artifacts`: branch_id,expected_revision,dimensions,reason. Returns `{revision_id}`; explicit reuse after invalidation, checks source permissions.
 - `human.export_text`: branch_id,revision_id. Returns `{text,status:'exported',revision_id}`; refuses unreviewed artifacts. Does not publish. No approved text inferred from pending proposals.
 
@@ -48,6 +48,7 @@ The user has redirected presentation to a compact artifact viewer, with all conv
 
 - `arena.open_artifact`: branch_id, optional revision_id. Returns exact authorized context and presentation metadata. Negotiate MCP Apps extension before claiming embedded rendering; expose useful structured output in every client. No tokens in the returned viewer location.
 - `arena.read_events`: workspace_id,branch_id, optional cursor/limit. Returns `{events,next_cursor,current_revision_id}`. Events identify the artifact, exact revision, authenticated author, timestamp, typed action and optional validated passage selection. Recheck permissions and redact revoked source-derived text on every read.
+- `arena.record_interaction`: same selection/comment/request_revision payload as the human interaction command below, but authenticated as the delegated agent. Persist that actor plus an unverified UI-origin hint; never claim human authorship or mutate accepted state. It is safe for embedded widgets to call this operation and then update model context.
 - `human.record_artifact_interaction`: workspace_id,branch_id,revision_id,expected_revision,idempotency_key,type (`selection`/`comment`/`request_revision`), dimension, optional selection `{start,end,text}`, optional comment. Returns `{event_id,revision_id}`. Only an authenticated human channel can attribute it to a person; validate offsets against the exact referenced text. A selection/comment does not approve a proposal or implicitly change the voice profile.
 
 ## Transport and viewer

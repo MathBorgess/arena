@@ -6,7 +6,7 @@ export const agentOperations = [
   'arena.list_work', 'arena.read_context', 'arena.read_source', 'arena.create_exploration',
   'arena.create_branch', 'arena.submit_proposal', 'arena.add_feedback', 'arena.compare_branches',
   'arena.propose_profile_change', 'arena.export_context', 'arena.get_operation', 'arena.list_profiles',
-  'arena.open_artifact', 'arena.read_events'
+  'arena.open_artifact', 'arena.read_events', 'arena.record_interaction'
 ] as const;
 export const humanOperations = [
   'human.decide_proposal', 'human.edit_branch', 'human.set_locks', 'human.create_profile',

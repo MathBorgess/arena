@@ -8,7 +8,7 @@ Build the textual Arena v1 described in docs/spec/arena-v1-original.md and docs/
 - Authentication supplies actors; tool arguments and app-only tool visibility cannot choose identity or inherit human approval.
 - Accepted revisions and approved voice profiles are immutable. Agent operations create proposals, never decisions. Structured locks, workspace authorization, idempotency and optimistic concurrency are server enforced.
 - All mutations and audit events commit atomically. Source content is untrusted data.
-- Test public domain/MCP and human UI seams only after the owner confirms them. Use the Matt Pocock tdd skill, one red-green slice at a time.
+- The owner confirmed public domain/MCP and artifact interaction→persistence→agent-context test seams on 2026-10-14. Test these public boundaries. Use the Matt Pocock tdd skill, one red-green slice at a time.
 - Run npm run check and npm test. Browser checks: npm run test:ui. Document real client verification separately from SDK fixtures.
 - Do not add images, posting, scheduling, integrated agent runners, paid services or background orchestration.
 - Keep local data, tokens, exports and databases out of Git. Treat loopback-only hosting as the supported v1 pilot.

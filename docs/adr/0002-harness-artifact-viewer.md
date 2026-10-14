@@ -1,6 +1,6 @@
 # 0002: Conversation in the harness, interactive artifact through MCP
 
-Status: product direction confirmed by the owner's steering; priority harness and test seam confirmation pending.
+Status: accepted. Priority clients are Codex and ChatGPT; the owner explicitly confirmed MCP and artifact interaction test seams on 2026-10-14.
 
 The user wants a quick visualization of the artifact being modified, with direct interaction that becomes context for the existing agent. Keep all conversational work in that harness. Arena owns durable artifacts, revisions, proposals and interaction events, exposed through MCP.
 
@@ -31,3 +31,11 @@ Sources checked 2026-10-14:
 - [Claude Code MCP resources](https://code.claude.com/docs/en/mcp)
 
 This changes the presentation layer and adds artifact-interaction context. Domain guarantees in ADR 0001 and the original text-only scope remain applicable. No embedded host support or real client pilot has been verified during this architecture update.
+
+## Priority clients and action authorization
+
+Codex uses scoped stdio MCP plus the compact local viewer. ChatGPT uses the same operations with an MCP Apps resource, and an optional Streamable HTTP endpoint for remote client compatibility. ChatGPT desktop local MCP configuration and ChatGPT web remote plugin installation are distinct setup routes. Web requires reachable HTTPS and authentication; no tunnel, deployment, public directory publication or account configuration is performed by this implementation. Claude support is deferred.
+
+The embedded widget may read the artifact, submit edits as pending proposals and record selection/comment context through the scoped agent channel. Its events identify that authenticated actor and UI origin without asserting verified human identity. `arena.record_interaction` cannot accept proposals, change accepted text, unlock values or approve voice. Actual human acceptance and direct accepted edits use the separately authenticated compact viewer. Never pass a human token through model-callable tool arguments.
+
+The acceptance pilot is Codex → ChatGPT. SDK/reference-host fixtures verify protocol and UI behavior; native client execution remains separately recorded.
