@@ -17,6 +17,6 @@ O pedido atual autoriza criar o repositório e implementar a spec. Ele sucede as
 
 ## Evidência e limites
 
-Implementação iniciada após a confirmação das fronteiras de teste; registrar resultados somente após execução. A suíte planejada usará dados fictícios, SQLite real e clientes MCP do SDK. Essa evidência verificará contratos, sem provar participação real do Codex ou Claude. Renderização no harness, passagem Codex → ChatGPT e julgamento editorial humano são critérios de piloto pendentes até execução nos clientes reais.
+O domínio durável, MCP e CLI estão implementados; a simplificação final do visualizador está em validação. A suíte usa dados fictícios, SQLite real, clientes MCP do SDK e um host AppBridge de referência. Os resultados finais ficam em `docs/acceptance.md`. Essa evidência verifica contratos, sem provar participação real do Codex ou ChatGPT. Renderização no harness, passagem Codex → ChatGPT e julgamento editorial humano são critérios de piloto pendentes até execução nos clientes reais, rastreados na issue #8.
 
 O pacote portátil distingue fontes, inferências, propostas e decisões e não inclui credenciais. Fontes revogadas não podem ser relidas nem exportadas. A política de remoção inclui originais locais, conteúdo derivado controlado e índices; cópias previamente exportadas e backups administrados pelo usuário não podem ser recolhidos pelo produto.
