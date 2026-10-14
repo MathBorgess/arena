@@ -5,6 +5,7 @@ Build the textual Arena v1 described in docs/spec/arena-v1-original.md and docs/
 - Work on codex/ branches. Never merge or deploy without specific owner authorization.
 - Use fictional data only. No real social account connection or user-level agent configuration changes are authorized by this implementation task.
 - Conversation stays in the user's harness. The durable domain service is shared by MCP and a compact artifact viewer (MCP Apps where supported, local fallback otherwise). No standalone conversational platform.
+- Latest owner direction: the viewer displays only the current proposal text, read-only, with native cursor selection. No editing, comments, review buttons, drawers, navigation or workflow controls. Selection automatically persists exact proposal/version context; requests and workflow commands belong in the harness conversation and skill commands. Human decisions use a separate local CLI channel when the harness can run commands; MCP agent credentials never inherit that authorization.
 - Authentication supplies actors; tool arguments and app-only tool visibility cannot choose identity or inherit human approval.
 - Accepted revisions and approved voice profiles are immutable. Agent operations create proposals, never decisions. Structured locks, workspace authorization, idempotency and optimistic concurrency are server enforced.
 - All mutations and audit events commit atomically. Source content is untrusted data.
