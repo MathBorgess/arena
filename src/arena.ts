@@ -94,9 +94,8 @@ export class Arena implements ArenaService {
     switch (operation) {
       case 'arena.list_work': return this.paginate('list_work', persisted, workspace, input, this.listWork(workspace, input), ['explorations']);
       case 'arena.read_context': return this.paginate('read_context', persisted, workspace, input, this.readContext(workspace, input), ['proposals', 'decisions', 'feedback', 'events', 'sources', 'sessions']);
-      case 'arena.open_artifact': return { ...this.paginate('read_context', persisted, workspace, input, this.readContext(workspace, input), ['proposals', 'decisions', 'feedback', 'events', 'sources', 'sessions']), presentation: {
-        resource_uri: 'ui://arena/artifact.html', format: 'mcp-apps', requires_host_support: true,
-        fallback: 'local_authenticated_viewer', human_actions_require_authentication: true } };
+      case 'arena.open_artifact': return this.paginate('read_context', persisted, workspace, input,
+        this.openArtifact(workspace, input), ['proposals', 'decisions', 'feedback', 'events', 'sources', 'sessions']);
       case 'arena.read_events': return this.paginate('read_events', persisted, workspace, input, this.readEvents(workspace, persisted, input), ['events']);
       case 'arena.compare_branches': return this.compareBranches(workspace, input);
       case 'arena.list_profiles': return this.listProfiles(workspace);
@@ -299,6 +298,39 @@ export class Arena implements ArenaService {
       next_action: proposals.some(proposal => proposal.status === 'pending')
         ? 'Revise as propostas pendentes e solicite uma decisão humana.' : 'Proponha um próximo passo para esta exploração.',
       next_cursor: null };
+  }
+
+  private artifactProposal(workspace: string, branch: Stored, input: Data): Stored | undefined {
+    if (input.presented_version !== undefined && input.proposal_id === undefined) this.invalid('presented_version exige proposal_id.');
+    const proposal = input.proposal_id !== undefined
+      ? this.get('proposal', workspace, input.proposal_id)
+      : (input.revision_id !== undefined ? [] : this.list('proposal', workspace)).filter(item => item.branch_id === branch.id && item.status === 'pending' &&
+          Object.hasOwn(item.changes, 'text') && (input.revision_id === undefined || item.base_revision_id === input.revision_id)).at(-1);
+    if (!proposal) return undefined;
+    if (proposal.branch_id !== branch.id) this.notFound();
+    if (proposal.status !== 'pending' || !Object.hasOwn(proposal.changes, 'text') ||
+      input.presented_version !== undefined && input.presented_version !== proposal.version ||
+      input.revision_id !== undefined && input.revision_id !== proposal.base_revision_id) {
+      throw new ArenaError('REVISION_CONFLICT', 'A proposta apresentada não corresponde ao texto pendente atual.',
+        { proposal_id: proposal.id, current_version: proposal.version }, false, 'Abra novamente a proposta e selecione o trecho da versão exata.');
+    }
+    return proposal;
+  }
+
+  private openArtifact(workspace: string, input: Data): Data {
+    const branch = this.get('branch', workspace, input.branch_id);
+    const proposal = this.artifactProposal(workspace, branch, input);
+    const revision = this.get('revision', workspace, proposal?.base_revision_id ?? input.revision_id ?? branch.current_revision_id);
+    if (revision.branch_id !== branch.id) this.notFound();
+    const safe = this.sanitize(proposal ?? revision, workspace);
+    const source_ids = proposal?.source_ids ?? revision.artifacts.text?.source_ids ?? [];
+    return { ...this.readContext(workspace, { ...input, revision_id: revision.id }), artifact: {
+      branch_id: branch.id, revision_id: revision.id, current_revision_id: branch.current_revision_id,
+      kind: proposal ? 'proposal' : 'accepted', text: proposal ? safe.changes.text : safe.fields.text,
+      source_ids, ...(proposal ? { proposal_id: proposal.id, presented_version: proposal.version } : {}),
+      ...(safe.redacted || safe.artifacts?.text?.redacted ? { redacted: true } : {})
+    }, presentation: { resource_uri: 'ui://arena/artifact/v1.html', format: 'mcp-apps', requires_host_support: true,
+      fallback: 'local_authenticated_viewer', human_actions_require_authentication: true, follow_current: input.revision_id === undefined && input.proposal_id === undefined } };
   }
 
   private submitProposal(workspace: string, actor: Actor, input: Data): Data {
@@ -512,26 +544,32 @@ export class Arena implements ArenaService {
     this.expectHead(branch, input.expected_revision);
     const revision = this.get('revision', workspace, input.revision_id);
     if (revision.branch_id !== branch.id) this.notFound();
-    if (revision.id !== branch.current_revision_id) this.conflict(branch, revision.id);
+    if (revision.id !== branch.current_revision_id && !['selection', 'selection_clear'].includes(input.type)) this.conflict(branch, revision.id);
+    const proposal = input.proposal_id !== undefined || input.presented_version !== undefined ? this.artifactProposal(workspace, branch, input) : undefined;
+    if (proposal && (input.dimension !== 'text' || input.presented_version !== proposal.version)) this.invalid('Informe a versão exata da proposta de texto.');
+    const selectedContent = proposal ? proposal.changes.text : revision.fields[input.dimension];
     if (!dimensions.includes(input.dimension)) this.invalid('Dimensão inválida.');
-    if (!['selection', 'comment', 'request_revision'].includes(input.type)) this.invalid('Tipo de interação inválido.');
+    if (!['selection', 'selection_clear', 'comment', 'request_revision'].includes(input.type)) this.invalid('Tipo de interação inválido.');
     let selection: Data | undefined;
-    if (input.selection !== undefined) {
+    if (input.type === 'selection_clear' && input.comment !== undefined) this.invalid('Uma seleção vazia não inclui comentário.');
+    if (input.type === 'selection_clear' && input.selection != null) this.invalid('Uma seleção vazia não contém trecho.');
+    if (input.selection != null) {
       const value = input.selection;
       if (!value || !Number.isSafeInteger(value.start) || !Number.isSafeInteger(value.end) || value.start < 0 ||
-        value.end <= value.start || value.end > revision.fields[input.dimension].length || typeof value.text !== 'string' ||
-        revision.fields[input.dimension].slice(value.start, value.end) !== value.text) this.invalid('A seleção deve corresponder ao trecho da revisão exata.');
+        value.end <= value.start || value.end > selectedContent.length || typeof value.text !== 'string' ||
+        selectedContent.slice(value.start, value.end) !== value.text) this.invalid('A seleção deve corresponder ao trecho da revisão exata.');
       selection = { start: value.start, end: value.end, text: value.text };
     }
     if (input.type === 'selection' && !selection) this.invalid('Uma seleção de texto é obrigatória.');
     if (input.comment !== undefined && typeof input.comment !== 'string') this.invalid('O comentário deve ser texto.');
-    if (input.type !== 'selection' && !selection && !input.comment?.trim()) this.invalid('Informe um comentário ou trecho para a interação.');
-    const source_ids = revision.artifacts[input.dimension]?.source_ids ?? [];
+    if (!['selection', 'selection_clear'].includes(input.type) && !selection && !input.comment?.trim()) this.invalid('Informe um comentário ou trecho para a interação.');
+    const source_ids = input.type === 'selection_clear' ? [] : proposal?.source_ids ?? revision.artifacts[input.dimension]?.source_ids ?? [];
     this.validateSourceIds(workspace, source_ids);
     const id = randomUUID();
     this.insert('event', { id, event_id: id, workspace_id: workspace, artifact_id: branch.id, branch_id: branch.id,
       revision_id: revision.id, type: input.type, operation, dimension: input.dimension,
-      ...(selection ? { selection } : {}), comment: input.comment ?? '', source_ids,
+      ...(selection ? { selection } : input.type === 'selection_clear' ? { selection: null } : {}),
+      ...(proposal ? { proposal_id: proposal.id, presented_version: proposal.version } : {}), comment: input.comment ?? '', source_ids,
       author: actor, created_at: this.now(), ui_origin: operation === 'arena.record_interaction' ? 'unverified' : 'authenticated_human_channel' });
     return { event_id: id, revision_id: revision.id };
   }

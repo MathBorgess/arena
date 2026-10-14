@@ -160,7 +160,7 @@ test('embedded passage context stays attributed to the scoped agent and a forged
   assert.equal((artifact.structuredContent as any).presentation.ui_support, 'not_advertised');
   const viewer = new URL((artifact.structuredContent as any).presentation.viewer_url);
   assert.equal(viewer.searchParams.get('branch_id'), created.branch_id);
-  assert.equal(viewer.searchParams.get('revision_id'), edited.revision_id);
+  assert.equal(viewer.searchParams.get('revision_id'), null);
   assert.equal(viewer.searchParams.has('discard'), false);
   const unavailable = await client.callTool({ name: 'arena.read_context', arguments: { branch_id: 'unavailable-branch' } });
   assert.equal(unavailable.isError, true);
