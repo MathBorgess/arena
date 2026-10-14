@@ -276,7 +276,7 @@ test('artifact selections persist exact UTF16 revision context with delegated au
     assert.equal(f.context().events.some((item: any) => item.id === event.event_id), true);
     const artifact = f.call('arena.open_artifact', { branch_id: f.created.branch_id, revision_id: accepted.revision_id });
     assert.equal(artifact.revision.id, accepted.revision_id);
-    assert.equal(artifact.presentation.resource_uri, 'ui://arena/artifact.html');
+    assert.equal(artifact.presentation.resource_uri, 'ui://arena/artifact/v1.html');
     assert.throws(() => f.call('human.record_artifact_interaction', { branch_id: f.created.branch_id,
       revision_id: accepted.revision_id, expected_revision: accepted.revision_id, dimension: 'text', type: 'selection',
       selection: { ...selection, text: 'Texto diferente' } }), { code: 'INVALID_INPUT' });
