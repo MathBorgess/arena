@@ -53,6 +53,116 @@ test('exact branches preserve locks and origin while dependency changes require 
   } finally { f.cleanup(); }
 });
 
+test('revoking a voice reference invalidates text derived from the pinned voice and records the permission change for the agent', () => {
+  const f = fixture();
+  try {
+    const imported = f.call('human.import_sources', { format: 'json', content: JSON.stringify([{ text: 'Exemplo de voz fictício' }]),
+      origin: 'Arquivo exemplo', rights: 'Autorizado', usage_scope: 'Arena', coverage: 'Um exemplo' });
+    const source_id = imported.source_ids[0];
+    const content = { identity: 'Autora exemplo', objectives: [], tone: 'Direto', vocabulary: [], positive_examples: ['Exemplo de voz fictício'], negative_examples: [], rules: [] };
+    const voice = f.call('human.create_profile', { name: 'Voz exemplo', content, source_ids: [source_id] });
+    const exploration = f.call('arena.create_exploration', { title: 'Com voz referenciada', objective: 'Texto fictício', profile_revision_id: voice.profile_revision_id });
+    const edited = f.call('human.edit_branch', { branch_id: exploration.branch_id, expected_revision: exploration.revision_id,
+      changes: { text: 'Texto influenciado pela referência de voz' }, dependencies: { text: [] }, source_ids: [], reason: 'Redação explícita' });
+    const cursor = f.call('arena.read_events', { branch_id: exploration.branch_id }, f.credentials.agent).event_cursor;
+    f.call('human.revoke_source', { source_id, expected_revision: 1, reason: 'Revogar a amostra' });
+    assert.equal(f.context(exploration.branch_id).revision.fields.text, '');
+    assert.throws(() => f.call('human.export_text', { branch_id: exploration.branch_id, revision_id: edited.revision_id }), { code: 'SOURCE_UNAVAILABLE' });
+    assert.equal(f.call('arena.read_events', { branch_id: exploration.branch_id, since_cursor: cursor }, f.credentials.agent).events[0].type, 'source_revoked');
+  } finally { f.cleanup(); }
+});
+
+test('an event checkpoint resumes only new durable actions while page cursors keep their earlier snapshot', () => {
+  const f = fixture();
+  try {
+    const first = f.call('arena.read_events', { branch_id: f.created.branch_id, limit: 1 }, f.credentials.agent);
+    assert.ok(first.event_cursor);
+    const revision = f.edit({ text: 'Uma nova revisão' }, { text: [] });
+    const subsequent = f.call('arena.read_events', { branch_id: f.created.branch_id, since_cursor: first.event_cursor }, f.credentials.agent);
+    assert.equal(subsequent.events.length, 1);
+    assert.equal(subsequent.events[0].revision_id, revision.revision_id);
+    assert.equal(subsequent.current_revision_id, revision.revision_id);
+    assert.throws(() => f.call('arena.read_events', { branch_id: f.created.branch_id, since_cursor: first.event_cursor }), { code: 'NOT_FOUND' });
+    const empty = f.call('arena.read_events', { branch_id: f.created.branch_id, since_cursor: subsequent.event_cursor }, f.credentials.agent);
+    assert.deepEqual(empty.events, []);
+  } finally { f.cleanup(); }
+});
+
+test('source erasure cannot rewrite identity metadata, and saved pages and exact retries recheck source permissions', () => {
+  const f = fixture();
+  try {
+    const imported = f.call('human.import_sources', { format: 'json',
+      content: JSON.stringify([{ text: f.credentials.owner.id }, { text: 'Trecho privado fictício' }]),
+      origin: 'Exportação exemplo', rights: 'Autorizado', usage_scope: 'Arena', coverage: 'Dois textos' });
+    const source_id = imported.source_ids[1];
+    const revision = f.edit({ text: 'Derivado restrito na página' }, { text: [] }, { source_ids: [source_id] });
+    const interactionInput = { branch_id: f.created.branch_id, revision_id: revision.revision_id, expected_revision: revision.revision_id,
+      dimension: 'text', type: 'comment', comment: 'Comentário derivado restrito', idempotency_key: 'one-comment' };
+    f.call('human.record_artifact_interaction', interactionInput);
+    f.call('human.record_artifact_interaction', { ...interactionInput, idempotency_key: 'second-comment' });
+    const first = f.context(f.created.branch_id, { limit: 1 });
+    f.call('human.revoke_source', { source_id, expected_revision: 1, reason: 'Encerrar acesso' });
+    const following = f.context(f.created.branch_id, { limit: 1, cursor: first.next_cursor });
+    assert.equal(JSON.stringify(following).includes('Derivado restrito na página'), false);
+    assert.equal(JSON.stringify(following).includes('Comentário derivado restrito'), false);
+    const replay = f.call('human.record_artifact_interaction', interactionInput);
+    assert.ok(replay.event_id);
+    f.call('human.remove_source', { source_id: imported.source_ids[0], expected_revision: 1, reason: 'Remover dado adversarial' });
+    assert.deepEqual(f.arena.authenticate(f.credentials.owner_token), f.credentials.owner);
+    assert.equal(f.context().branch.id, f.created.branch_id);
+    assert.equal(f.context().events[0].author.id, f.credentials.owner.id);
+    assert.throws(() => f.call('arena.submit_proposal', { branch_id: f.created.branch_id,
+      base_revision_id: revision.revision_id, expected_revision: revision.revision_id,
+      changes: { text: f.credentials.owner_token }, dependencies: { text: [] }, rationale: 'Não guardar credenciais', source_ids: [] }), { code: 'INVALID_INPUT' });
+  } finally { f.cleanup(); }
+});
+
+test('native integration stages stay distinct owner attestations and social APIs remain explicitly unavailable', () => {
+  const f = fixture();
+  try {
+    const integrations = f.call('human.integration_status').integrations;
+    const codex = integrations.find((item: any) => item.provider === 'codex');
+    assert.equal(codex.state, 'not_configured');
+    assert.equal(codex.last_verified, null);
+    assert.equal(integrations.find((item: any) => item.provider === 'social-native').state, 'unavailable');
+    assert.throws(() => f.call('human.record_verification', { provider: 'codex', expected_revision: codex.revision,
+      stage: 'operation_tested', evidence: 'Sem etapas anteriores' }), { code: 'INVALID_INPUT' });
+    const configured = f.call('human.record_verification', { provider: 'codex', expected_revision: codex.revision,
+      stage: 'configured', evidence: 'Configuração local verificada pela proprietária' });
+    assert.equal(configured.state, 'configured');
+    assert.equal(configured.verifications.authenticated, undefined);
+    assert.equal(configured.verifications.configured.author.id, f.credentials.owner.id);
+    assert.equal(configured.evidence_type, 'owner_attestation');
+    assert.throws(() => f.call('human.record_verification', { provider: 'codex', expected_revision: codex.revision,
+      stage: 'authenticated', evidence: 'Versão antiga' }), { code: 'REVISION_CONFLICT' });
+  } finally { f.cleanup(); }
+});
+
+test('only the owner provisions and revokes members, reviewer rights are limited, and invitation tokens never replay', () => {
+  const f = fixture();
+  try {
+    const revision = f.call('arena.list_work').membership_revision;
+    const invitationInput = { name: 'Revisora fictícia', kind: 'human', role: 'reviewer', expected_revision: revision, idempotency_key: 'invite-reviewer' };
+    assert.throws(() => f.call('human.invite_member', invitationInput, f.credentials.agent), { code: 'ACCESS_DENIED' });
+    const invited = f.call('human.invite_member', invitationInput);
+    const reviewer = f.arena.authenticate(invited.token);
+    assert.deepEqual(reviewer, invited.actor);
+    const replay = f.call('human.invite_member', invitationInput);
+    assert.equal(Object.hasOwn(replay, 'token'), false);
+    assert.equal(JSON.stringify(f.call('arena.get_operation', { idempotency_key: 'invite-reviewer' })).includes(invited.token), false);
+    assert.equal(f.call('arena.list_work').membership_revision, revision + 1);
+    assert.throws(() => f.call('human.edit_branch', { branch_id: f.created.branch_id,
+      expected_revision: f.context().revision.id, changes: { text: 'Tentativa de edição' }, source_ids: [], reason: 'Não permitida' }, reviewer), { code: 'ACCESS_DENIED' });
+    const feedback = f.call('arena.add_feedback', { branch_id: f.created.branch_id, target_id: f.created.branch_id,
+      revision_id: f.created.revision_id, expected_revision: f.created.revision_id, text: 'Pergunta autorizada', type: 'question' }, reviewer);
+    assert.ok(feedback.feedback_id);
+    assert.throws(() => f.call('human.revoke_member', { member_id: f.credentials.agent.id, expected_revision: 1, reason: 'Não é proprietária' }, reviewer), { code: 'ACCESS_DENIED' });
+    f.call('human.revoke_member', { member_id: reviewer.id, expected_revision: invited.member_revision, reason: 'Acesso encerrado' });
+    assert.throws(() => f.arena.authenticate(invited.token), { code: 'ACCESS_DENIED' });
+    assert.throws(() => f.call('arena.get_operation', { idempotency_key: 'anything' }, reviewer), { code: 'NOT_FOUND' });
+  } finally { f.cleanup(); }
+});
+
 test('opaque list, context and event cursors pin snapshots, and source revocation still redacts a saved page', () => {
   const f = fixture();
   try {
@@ -188,6 +298,9 @@ test('approved voice revisions remain immutable and branches stay pinned when a 
     const proposed = f.call('arena.propose_profile_change', { profile_revision_id: profile.profile_revision_id,
       expected_revision: profile.profile_revision_id, changes: { tone: 'Direto e caloroso' },
       evidence_source_ids: [], rationale: 'Uma mudança que precisa de aprovação' }, f.credentials.agent);
+    const presented = f.call('arena.list_profiles').proposals.find((proposal: any) => proposal.id === proposed.proposal_id);
+    assert.equal(presented.changes.tone, 'Direto e caloroso');
+    assert.equal(presented.version, proposed.version);
     assert.equal(f.context(exploration.branch_id).profile.content.tone, 'Direto');
     assert.throws(() => f.call('human.approve_profile', { proposal_id: proposed.proposal_id,
       presented_version: proposed.version, expected_revision: profile.profile_revision_id }, f.credentials.agent), { code: 'ACCESS_DENIED' });
