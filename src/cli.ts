@@ -169,7 +169,7 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
       });
       if (typeof invited.token !== 'string' || !invited.token) throw new ArenaError('CAPABILITY_UNAVAILABLE',
         'A credencial de uma operação anterior não pode ser reexibida.', {}, false,
-        'Revogue a identidade incompleta no visualizador e provisione um novo nome de agente.');
+        'Provisione um novo nome de agente. A credencial anterior não pode ser recuperada.');
       writePrivate(path, `${invited.token}\n`, true);
       config.membership_revision = invited.workspace_revision;
       writePrivate(join(directory, 'arena.json'), `${JSON.stringify(config, null, 2)}\n`);

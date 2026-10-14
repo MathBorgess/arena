@@ -61,3 +61,54 @@ test('explicit historical URL keeps its exact accepted revision and polling remo
     expect(arena.execute('arena.read_context', credentials.agent, { ...scope, branch_id: created.branch_id, revision_id: current.revision_id }).revision.fields.text).toBe('Texto atual independente.');
   } finally { await viewer.close(); arena.close(); }
 });
+
+test('a delayed refresh cannot replace a newer artifact delivered by the host', async ({ page }) => {
+  const f = fixture(); const viewer = await startHttpServer({ arena: f.arena, workspace_id: f.credentials.workspace_id, port: 0 });
+  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; }); let refreshStarted = false;
+  try {
+    const frozen = new Date('2026-10-14T00:00:00Z');
+    await page.clock.install({ time: frozen }); await page.clock.pauseAt(frozen);
+    await page.exposeFunction('fixtureCall', async (operation: string, input: any) => {
+      const result = f.arena.execute(operation, f.credentials.agent, { ...f.scope, ...input });
+      if (operation === 'arena.open_artifact' && !refreshStarted) { refreshStarted = true; await held; }
+      return result;
+    });
+    const context = f.arena.execute('arena.open_artifact', f.credentials.agent, { ...f.scope, branch_id: f.created.branch_id });
+    await page.route(`${viewer.url}/fixture`, route => route.fulfill({ contentType: 'text/html', body: `<main id="arena"></main><script type="module">
+      import { mountArena } from '/app.js';
+      window.fixtureViewer = mountArena({ mode: 'embedded', call: window.fixtureCall });
+      await window.fixtureViewer.show(${JSON.stringify(context)});
+    </script>` }));
+    await page.goto(`${viewer.url}/fixture`);
+    const text = page.getByRole('textbox', { name: 'Texto da proposta' }); await expect(text).toHaveValue('Uma ideia abre uma conversa.');
+    const refreshing = page.evaluate(() => (window as any).fixtureViewer.refresh());
+    await expect.poll(() => refreshStarted).toBe(true);
+    f.arena.execute('arena.submit_proposal', f.credentials.agent, { ...f.scope, branch_id: f.created.branch_id, expected_revision: f.base.revision_id, base_revision_id: f.base.revision_id, changes: { text: 'Um texto novo entregue pelo host.' }, source_ids: [], rationale: 'Outra proposta fictícia', idempotency_key: 'new-host-artifact' });
+    const next = f.arena.execute('arena.open_artifact', f.credentials.agent, { ...f.scope, branch_id: f.created.branch_id });
+    await page.evaluate(context => (window as any).fixtureViewer.show(context), next);
+    await expect(text).toHaveValue('Um texto novo entregue pelo host.');
+    release(); await refreshing;
+    await expect(text).toHaveValue('Um texto novo entregue pelo host.');
+    await expect(page.getByRole('button')).toHaveCount(0);
+  } finally { release(); await viewer.close(); f.arena.close(); }
+});
+
+test('a conflicting pinned selection clears the visible passage and can be selected again after refresh', async ({ page }) => {
+  const f = fixture(); const viewer = await startHttpServer({ arena: f.arena, workspace_id: f.credentials.workspace_id, port: 0 });
+  try {
+    await login(page, `${viewer.url}/?branch_id=${f.created.branch_id}&proposal_id=${f.proposal.proposal_id}&presented_version=1`, f.credentials.owner_token);
+    const text = page.getByRole('textbox', { name: 'Texto da proposta' }); await expect(text).toHaveValue('Uma ideia abre uma conversa.');
+    const next = f.arena.execute('human.edit_branch', f.credentials.owner, { ...f.scope, branch_id: f.created.branch_id,
+      expected_revision: f.base.revision_id, changes: { theme: 'Outro tema fictício' }, dependencies: { theme: [] }, source_ids: [], reason: 'Avançar a base', idempotency_key: 'advance-selection-head' });
+    await text.dblclick({ position: { x: 65, y: 20 } });
+    await expect(page.getByRole('status')).toContainText('avançou');
+    expect(await text.evaluate((node: HTMLTextAreaElement) => node.selectionEnd - node.selectionStart)).toBe(0);
+    const events = () => f.arena.execute('arena.read_events', f.credentials.agent, { ...f.scope, branch_id: f.created.branch_id }).events;
+    expect(events().filter((event: any) => event.type === 'selection')).toHaveLength(0);
+    await page.waitForResponse(response => response.url().endsWith('/api/call') && response.request().postDataJSON()?.operation === 'arena.open_artifact');
+    await text.dblclick({ position: { x: 65, y: 20 } });
+    await expect.poll(() => events().filter((event: any) => event.type === 'selection').length).toBe(1);
+    expect(events().at(-1)).toMatchObject({ proposal_id: f.proposal.proposal_id, revision_id: f.base.revision_id, selection: { text: 'ideia' } });
+    expect(f.arena.execute('arena.read_context', f.credentials.agent, { ...f.scope, branch_id: f.created.branch_id }).revision.id).toBe(next.revision_id);
+  } finally { await viewer.close(); f.arena.close(); }
+});

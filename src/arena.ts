@@ -3,8 +3,10 @@ import { DatabaseSync } from 'node:sqlite';
 import { ArenaError, dimensions, type Actor, type ArenaService, type BootstrapResult } from './contracts.js';
 import { parseTextExport } from './import-text.js';
 
+import type { Adapter, Branch, Decision, Dependencies, DimensionText, Feedback, PassageSelection, Profile, ProfileDecision, ProfileProposal, ProfileRevision, Proposal, RecordRegistry, RecordType, Revision, Session, Snapshot, Source, VoiceContent } from './domain-records.js';
+
+// Untrusted wire arguments remain dynamic until each operation validates them. Stored domain records do not.
 type Data = Record<string, any>;
-type Stored = Data & { id: string; workspace_id: string };
 
 /** Durable domain boundary shared by authenticated transports. */
 export class Arena implements ArenaService {
@@ -188,7 +190,7 @@ export class Arena implements ArenaService {
   }
 
   private integrationStatus(workspace: string): Data {
-    const native = ['codex', 'chatgpt'].map(provider => this.adapter(workspace, provider));
+    const native = (['codex', 'chatgpt'] as const).map(provider => this.adapter(workspace, provider));
     const imported = this.list('source', workspace).length > 0;
     return { integrations: [...native,
       { provider: 'user-export', account: null, revision: 1, state: imported ? 'operation_tested' : 'available',
@@ -200,7 +202,7 @@ export class Arena implements ArenaService {
         unavailable_reason: 'A v1 usa exportações JSON/CSV autorizadas; não acessa redes sociais.' }] };
   }
 
-  private adapter(workspace: string, provider: string): Stored {
+  private adapter(workspace: string, provider: Adapter['provider']): Adapter {
     const existing = this.list('adapter', workspace).find(adapter => adapter.provider === provider);
     return existing ?? { id: `${workspace}:${provider}`, workspace_id: workspace, provider, revision: 1,
       account: null, state: 'not_configured', capabilities: ['read_context', 'submit_proposal', 'artifact_interactions'], scopes: [workspace],
@@ -230,14 +232,19 @@ export class Arena implements ArenaService {
     return adapter;
   }
 
-  private assertNoCredential(value: string, workspace: string): void {
-    // Credentials are random opaque strings; reject exact provisioned values embedded in context text.
-    const candidates = value.match(/[A-Za-z0-9_-]{43}/g) ?? [];
-    for (const candidate of candidates) {
-      if (this.db.prepare('SELECT id FROM actors WHERE token_hash = ?').get(this.hash(candidate))) {
-        this.invalid('Credenciais não podem ser registradas no contexto.');
+  private assertNoCredential(value: string, workspace: string, hashes = this.credentialHashes()): void {
+    // Tokens may start anywhere within an allowed-character run, including next to other text.
+    for (const run of value.match(/[A-Za-z0-9_-]{43,}/g) ?? []) {
+      for (let start = 0; start <= run.length - 43; start++) {
+        if (hashes.has(this.hash(run.slice(start, start + 43)))) {
+          this.invalid('Credenciais não podem ser registradas no contexto.');
+        }
       }
     }
+  }
+
+  private credentialHashes(): Set<string> {
+    return new Set(this.db.prepare('SELECT token_hash FROM actors').all().map(row => String(row.token_hash)));
   }
 
   private createExploration(workspace: string, actor: Actor, input: Data): Data {
@@ -300,7 +307,7 @@ export class Arena implements ArenaService {
       next_cursor: null };
   }
 
-  private artifactProposal(workspace: string, branch: Stored, input: Data): Stored | undefined {
+  private artifactProposal(workspace: string, branch: Branch, input: Data): Proposal | undefined {
     if (input.presented_version !== undefined && input.proposal_id === undefined) this.invalid('presented_version exige proposal_id.');
     const proposal = input.proposal_id !== undefined
       ? this.get('proposal', workspace, input.proposal_id)
@@ -346,7 +353,7 @@ export class Arena implements ArenaService {
     if (input.warnings !== undefined && (!Array.isArray(input.warnings) || input.warnings.some((warning: unknown) => typeof warning !== 'string'))) {
       this.invalid('warnings deve ser uma lista de textos.');
     }
-    const proposal: Stored = { id: randomUUID(), workspace_id: workspace, branch_id: branch.id,
+    const proposal: Proposal = { id: randomUUID(), workspace_id: workspace, branch_id: branch.id,
       base_revision_id: base.id, version: 1, status: 'pending', changes, dependencies, rationale, source_ids,
       warnings: [...(input.warnings ?? [])], author: actor, created_at: this.now(), origin_proposal_id: null };
     if (branch.profile_revision_id) proposal.warnings.push('A fidelidade às regras qualitativas da voz exige avaliação humana.');
@@ -358,7 +365,7 @@ export class Arena implements ArenaService {
       }
       for (const key of ['external_session_id', 'client_version']) if (metadata[key] !== undefined &&
         (typeof metadata[key] !== 'string' || !metadata[key].trim() || metadata[key].length > 200)) this.invalid('Metadado opcional da sessão inválido.');
-      const session: Stored = { id: randomUUID(), workspace_id: workspace, branch_id: branch.id,
+      const session: Session = { id: randomUUID(), workspace_id: workspace, branch_id: branch.id,
         provider: metadata.provider, client_name: metadata.client_name, external_session_id: metadata.external_session_id ?? null,
         ...(metadata.client_version ? { client_version: metadata.client_version } : {}),
         input_revision_id: base.id, source_ids, proposal_ids: [proposal.id], verification: 'declared',
@@ -381,7 +388,7 @@ export class Arena implements ArenaService {
       if (proposal.branch_id !== branch.id) this.notFound();
     }
     if (!['critique', 'question', 'comment'].includes(input.type)) this.invalid('Tipo de comentário inválido.');
-    const feedback: Stored = { id: randomUUID(), workspace_id: workspace, branch_id: branch.id,
+    const feedback: Feedback = { id: randomUUID(), workspace_id: workspace, branch_id: branch.id,
       target_id: input.target_id, revision_id: revision.id, text: this.requireText(input.text, 'text'),
       type: input.type, source_ids: this.revisionSources(revision), author: actor, created_at: this.now() };
     if (input.target_id !== branch.id) feedback.source_ids = [...new Set([...feedback.source_ids, ...this.get('proposal', workspace, input.target_id).source_ids])];
@@ -428,14 +435,12 @@ export class Arena implements ArenaService {
       const revision = this.changedRevision(previous, acceptedProposal.changes, acceptedProposal.dependencies, acceptedProposal.source_ids, proposal.author);
       revision.author = actor;
       if (proposal.session_id) for (const dimension of Object.keys(acceptedProposal.changes)) revision.artifacts[dimension].session_id = proposal.session_id;
-      this.insert('revision', revision);
-      branch.current_revision_id = revision.id;
-      this.update('branch', branch);
+      this.commitRevision(branch, revision);
       revision_id = revision.id;
     }
     acceptedProposal.status = input.decision;
     this.update('proposal', acceptedProposal);
-    const decision: Stored = { id: randomUUID(), workspace_id: workspace, branch_id: branch.id,
+    const decision: Decision = { id: randomUUID(), workspace_id: workspace, branch_id: branch.id,
       proposal_id: acceptedProposal.id, presented_proposal_id: proposal.id,
       presented_version: proposal.version, decision: input.decision,
       base_revision_id: proposal.base_revision_id, examined_revision_id: input.expected_head_revision,
@@ -447,14 +452,14 @@ export class Arena implements ArenaService {
       ...(partial ? { derived_proposal_id: acceptedProposal.id } : {}) };
   }
 
-  private validateChanges(value: unknown): Data {
+  private validateChanges(value: unknown): DimensionText {
     if (!value || typeof value !== 'object' || Array.isArray(value) || !Object.keys(value).length) {
       return this.invalid('changes deve indicar ao menos uma dimensão.');
     }
     for (const [dimension, content] of Object.entries(value)) {
       if (!dimensions.includes(dimension as any) || typeof content !== 'string') this.invalid('Dimensão ou texto inválido.');
     }
-    return { ...value };
+    return { ...value } as DimensionText;
   }
 
   private createBranch(workspace: string, actor: Actor, input: Data): Data {
@@ -505,7 +510,7 @@ export class Arena implements ArenaService {
         if (after < 0) this.notFound();
       }
     }
-    const checkpoint: Stored = { id: randomUUID(), workspace_id: workspace, branch_id: branch.id, actor_id: actor.id,
+    const checkpoint: RecordRegistry['event_checkpoint'] = { id: randomUUID(), workspace_id: workspace, branch_id: branch.id, actor_id: actor.id,
       after_event_id: all.at(-1)?.id ?? null };
     this.insert('event_checkpoint', checkpoint);
     return { events: all.slice(after + 1), next_cursor: null, current_revision_id: branch.current_revision_id,
@@ -517,7 +522,7 @@ export class Arena implements ArenaService {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) this.invalid('Use limit entre 1 e 500.');
     const scope = this.canonical({ kind, branch_id: input.branch_id ?? null, revision_id: input.revision_id ?? null,
       query: input.query ?? null, since_cursor: input.since_cursor ?? null });
-    let snapshot: Stored;
+    let snapshot: Snapshot;
     let offset = 0;
     if (input.cursor !== undefined && input.cursor !== null) {
       let cursor: any;
@@ -550,7 +555,7 @@ export class Arena implements ArenaService {
     const selectedContent = proposal ? proposal.changes.text : revision.fields[input.dimension];
     if (!dimensions.includes(input.dimension)) this.invalid('Dimensão inválida.');
     if (!['selection', 'selection_clear', 'comment', 'request_revision'].includes(input.type)) this.invalid('Tipo de interação inválido.');
-    let selection: Data | undefined;
+    let selection: PassageSelection | undefined;
     if (input.type === 'selection_clear' && input.comment !== undefined) this.invalid('Uma seleção vazia não inclui comentário.');
     if (input.type === 'selection_clear' && input.selection != null) this.invalid('Uma seleção vazia não contém trecho.');
     if (input.selection != null) {
@@ -578,16 +583,18 @@ export class Arena implements ArenaService {
     const items = parseTextExport(input.format, input.content);
     const source_ids: string[] = [];
     for (const item of items) {
-      const metadata: Data = {};
-      for (const field of ['origin', 'rights', 'usage_scope', 'coverage']) {
+      const metadata: Pick<Source, 'origin' | 'rights' | 'usage_scope' | 'coverage' | 'author' | 'date'> = {
+        origin: '', rights: '', usage_scope: '', coverage: '', author: null, date: null
+      };
+      for (const field of ['origin', 'rights', 'usage_scope', 'coverage'] as const) {
         metadata[field] = this.requireText(item[field] ?? input[field], field);
       }
-      for (const field of ['author', 'date']) {
+      for (const field of ['author', 'date'] as const) {
         const value = item[field] ?? input[field] ?? null;
         if (value !== null && typeof value !== 'string') this.invalid(`Metadado ${field} inválido.`);
         metadata[field] = value;
       }
-      const source: Stored = { id: randomUUID(), workspace_id: workspace, revision: 1, status: 'active',
+      const source: Source = { id: randomUUID(), workspace_id: workspace, revision: 1, status: 'active',
         content: String(item.text).replace(/\r\n?/g, '\n'), ...metadata, imported_by: actor, created_at: this.now() };
       this.insert('source', source);
       source_ids.push(source.id);
@@ -597,12 +604,12 @@ export class Arena implements ArenaService {
         'Não é uma conexão nativa com redes sociais.'], coverage: input.coverage ?? 'Metadados por fonte' } };
   }
 
-  private sourceMetadata(source: Stored): Data {
+  private sourceMetadata(source: Source): Data {
     return Object.fromEntries(['id', 'revision', 'status', 'origin', 'author', 'date', 'rights', 'usage_scope', 'coverage']
-      .map(key => [key, source[key]]));
+      .map(key => [key, source[key as keyof Source]]));
   }
 
-  private sourcePermitted(source: Stored): boolean {
+  private sourcePermitted(source: Source): boolean {
     const denied = /^(unknown|none|denied|unlicensed|sem permissão|não autorizado|proibido)$/i;
     return source.status === 'active' && typeof source.rights === 'string' && !!source.rights.trim() &&
       typeof source.usage_scope === 'string' && !!source.usage_scope.trim() &&
@@ -635,7 +642,7 @@ export class Arena implements ArenaService {
         const record = JSON.parse(String(row.data));
         const erased = this.sanitize(record, workspace, true);
         if (row.type === 'source' && record.id === source.id) erased.content = '';
-        return { type: String(row.type), erased };
+        return { type: String(row.type) as RecordType, erased };
       });
       const operations = this.db.prepare('SELECT actor_id, key, result FROM operations WHERE workspace_id = ?').all(workspace);
       const erasedOperations = operations.map(row => ({ actor_id: row.actor_id!, key: row.key!,
@@ -655,19 +662,30 @@ export class Arena implements ArenaService {
     const terms = unavailable.map(source => source.content).filter(content => typeof content === 'string' && content.length > 0);
     const blank = (item: any): any => typeof item === 'string' ? '' : Array.isArray(item) ? [] : item && typeof item === 'object'
       ? Object.fromEntries(Object.entries(item).map(([key, entry]) => [key, blank(entry)])) : item;
-    const sensitive = new Set(['content', 'changes', 'rationale', 'comment', 'text', 'reason', 'selection', 'markdown', 'name', 'warnings']);
-    const identifiers = new Set(['id', 'kind', 'role', 'type', 'operation', 'status', 'state', 'provider', 'verification', 'date', 'created_at', 'resource_uri',
+    const sensitive = new Set(['content', 'changes', 'rationale', 'comment', 'text', 'reason', 'selection', 'markdown', 'name', 'warnings',
+      'provider', 'client_name', 'client_version', 'external_session_id', 'date', 'origin', 'rights', 'usage_scope', 'coverage']);
+    // These fields are assigned or validated by Arena. Declarations such as external_session_id,
+    // provider and source dates are free text, even when their names resemble identifiers.
+    const identifiers = new Set(['id', 'workspace_id', 'actor_id', 'branch_id', 'artifact_id', 'event_id', 'proposal_id', 'session_id',
+      'revision_id', 'profile_id', 'profile_revision_id', 'exploration_id', 'source_id', 'target_id', 'decision_id', 'feedback_id',
+      'parent_revision_id', 'current_revision_id', 'base_revision_id', 'input_revision_id', 'origin_branch_id', 'origin_revision_id',
+      'origin_proposal_id', 'presented_proposal_id', 'examined_revision_id', 'after_event_id', 'derived_proposal_id', 'checkpoint_id', 'member_id', 'kind', 'role', 'type', 'operation',
+      'status', 'state', 'verification', 'created_at', 'last_verified', 'resource_uri', 'proposal_ids',
       'next_cursor', 'event_cursor', 'checksum', 'dimension', 'dependencies', 'selected_dimensions', 'vary_dimensions', 'source_ids', '_arena_source_ids']);
     const scrub = (item: any, key = ''): any => {
-      if (typeof item === 'string') return key.endsWith('_id') || identifiers.has(key) ? item
+      if (typeof item === 'string') return identifiers.has(key) ? item
         : terms.reduce((text, term) => text.split(term).join(''), item);
       if (item === null || typeof item !== 'object') return item;
       if (Array.isArray(item)) return item.map(entry => scrub(entry, key));
-      const affected = [...(item.source_ids ?? []), ...(item._arena_source_ids ?? [])].some(id => blocked.has(id));
+      const affected = blocked.has(item.id) || [...(item.source_ids ?? []), ...(item._arena_source_ids ?? [])].some(id => blocked.has(id));
+      // Integration providers are server enums; session providers remain untrusted declarations.
+      const canonicalProvider = Array.isArray(item.capabilities) && typeof item.state === 'string' &&
+        ['codex', 'chatgpt', 'user-export', 'social-native'].includes(item.provider);
       const result: Data = {};
       for (const [key, entry] of Object.entries(item)) {
         if (key === '_arena_source_ids' && !retainProvenance) continue;
-        result[key] = affected && sensitive.has(key) ? blank(entry) : scrub(entry, key);
+        result[key] = key === 'provider' && canonicalProvider ? entry
+          : affected && (sensitive.has(key) || key === 'author' && typeof entry === 'string') ? blank(entry) : scrub(entry, key);
       }
       if (affected) {
         result.redacted = true;
@@ -695,9 +713,16 @@ export class Arena implements ArenaService {
   }
 
   private checkInputCredentials(value: any, workspace: string): void {
-    if (typeof value === 'string') this.assertNoCredential(value, workspace);
-    else if (Array.isArray(value)) for (const item of value) this.checkInputCredentials(item, workspace);
-    else if (value && typeof value === 'object') for (const item of Object.values(value)) this.checkInputCredentials(item, workspace);
+    const hashes = this.credentialHashes();
+    const check = (item: unknown): void => {
+      if (typeof item === 'string') this.assertNoCredential(item, workspace, hashes);
+      else if (Array.isArray(item)) for (const entry of item) check(entry);
+      else if (item && typeof item === 'object') for (const [key, entry] of Object.entries(item)) {
+        this.assertNoCredential(key, workspace, hashes);
+        check(entry);
+      }
+    };
+    check(value);
   }
 
   private exportContext(workspace: string, input: Data): Data {
@@ -722,7 +747,7 @@ export class Arena implements ArenaService {
     return { ...this.sourceMetadata(source), content: source.content.slice(offset, end), next_offset: end < source.content.length ? end : null };
   }
 
-  private validateVoice(value: unknown, partial: boolean): Data {
+  private validateVoice(value: unknown, partial: boolean): VoiceContent {
     const keys = ['identity', 'objectives', 'tone', 'vocabulary', 'positive_examples', 'negative_examples', 'rules'];
     if (!value || typeof value !== 'object' || Array.isArray(value) || !Object.keys(value).length) return this.invalid('Conteúdo do perfil inválido.');
     for (const [key, content] of Object.entries(value)) {
@@ -731,7 +756,7 @@ export class Arena implements ArenaService {
       }
     }
     if (!partial && keys.some(key => !Object.hasOwn(value, key))) this.invalid('Preencha todas as dimensões do perfil de voz.');
-    return { ...value };
+    return { ...value } as VoiceContent;
   }
 
   private listProfiles(workspace: string): Data {
@@ -746,7 +771,7 @@ export class Arena implements ArenaService {
     const profile = this.get('profile', workspace, base.profile_id);
     this.expectProfile(profile, input.expected_revision);
     if (base.id !== profile.current_revision_id) this.expectProfile(profile, base.id);
-    const proposal: Stored = { id: randomUUID(), workspace_id: workspace, profile_id: profile.id,
+    const proposal: ProfileProposal = { id: randomUUID(), workspace_id: workspace, profile_id: profile.id,
       profile_revision_id: base.id, base_revision_id: base.id, version: 1, status: 'pending',
       changes: this.validateVoice(input.changes, true), source_ids: this.validateSourceIds(workspace, [...base.source_ids,
         ...this.validateSourceIds(workspace, input.evidence_source_ids)]),
@@ -755,7 +780,7 @@ export class Arena implements ArenaService {
     return { proposal_id: proposal.id, version: 1, status: 'pending' };
   }
 
-  private expectProfile(profile: Stored, expected: unknown): void {
+  private expectProfile(profile: Profile, expected: unknown): void {
     this.requireText(expected, 'expected_revision');
     if (profile.current_revision_id !== expected) throw new ArenaError('REVISION_CONFLICT', 'O perfil avançou.',
       { profile_id: profile.id, current_revision_id: profile.current_revision_id });
@@ -771,7 +796,7 @@ export class Arena implements ArenaService {
     const base = this.get('profile_revision', workspace, proposal.base_revision_id);
     const source_ids = this.validateSourceIds(workspace, [...base.source_ids, ...proposal.source_ids]);
     if (input.comment !== undefined && typeof input.comment !== 'string') this.invalid('comment deve ser texto.');
-    const revision: Stored = { id: randomUUID(), workspace_id: workspace, profile_id: profile.id,
+    const revision: ProfileRevision = { id: randomUUID(), workspace_id: workspace, profile_id: profile.id,
       version: base.version + 1, content: { ...base.content, ...proposal.changes }, source_ids,
       author: actor, created_at: this.now() };
     this.insert('profile_revision', revision);
@@ -779,7 +804,7 @@ export class Arena implements ArenaService {
     this.update('profile', profile);
     proposal.status = 'accepted';
     this.update('profile_proposal', proposal);
-    const decision: Stored = { id: randomUUID(), workspace_id: workspace, profile_id: profile.id,
+    const decision: ProfileDecision = { id: randomUUID(), workspace_id: workspace, profile_id: profile.id,
       proposal_id: proposal.id, presented_version: proposal.version, decision: 'accepted', profile_revision_id: revision.id,
       source_ids, comment: input.comment ?? '', author: actor, created_at: this.now() };
     this.insert('profile_decision', decision);
@@ -792,7 +817,7 @@ export class Arena implements ArenaService {
     const previous = this.get('revision', workspace, branch.current_revision_id);
     const changes = this.validateChanges(input.changes);
     const dependencies = this.validateDependencies(input.dependencies, changes);
-    const source_ids = this.validateSourceIds(workspace, input.source_ids);
+    const source_ids = this.validateSourceIds(workspace, this.inferredSources(previous, changes, dependencies, input.source_ids));
     const reason = this.requireText(input.reason, 'reason');
     const revision = this.changedRevision(previous, changes, dependencies, source_ids, actor);
     revision.reason = reason;
@@ -800,8 +825,8 @@ export class Arena implements ArenaService {
     return { revision_id: revision.id };
   }
 
-  private changedRevision(previous: Stored, changes: Data, dependencies: Data, source_ids: string[], author: Actor): Stored {
-    const revision: Stored = { ...previous, id: randomUUID(), parent_revision_id: previous.id,
+  private changedRevision(previous: Revision, changes: DimensionText, dependencies: Dependencies, source_ids: string[], author: Actor): Revision {
+    const revision: Revision = { ...previous, id: randomUUID(), parent_revision_id: previous.id,
       fields: { ...previous.fields, ...changes }, artifacts: structuredClone(previous.artifacts), author, created_at: this.now() };
     const changed = new Set(Object.keys(changes).filter(dimension => changes[dimension] !== previous.fields[dimension]));
     for (const [dimension, content] of Object.entries(changes)) {
@@ -815,7 +840,7 @@ export class Arena implements ArenaService {
     let expanded = true;
     while (expanded) {
       expanded = false;
-      for (const [dimension, artifact] of Object.entries(revision.artifacts) as [string, Data][]) {
+      for (const [dimension, artifact] of Object.entries(revision.artifacts)) {
         if (Object.hasOwn(changes, dimension) || changed.has(dimension)) continue;
         if (changed.size && (artifact.dependencies === null || artifact.dependencies === undefined || artifact.dependencies.some((upstream: string) => changed.has(upstream)))) {
           artifact.needs_review = true;
@@ -837,12 +862,12 @@ export class Arena implements ArenaService {
     return revision;
   }
 
-  private revisionSources(revision: Stored): string[] {
+  private revisionSources(revision: Revision): string[] {
     const voice = revision.profile_revision_id ? this.get('profile_revision', revision.workspace_id, revision.profile_revision_id).source_ids : [];
-    return [...new Set([...voice, ...(Object.values(revision.artifacts ?? {}) as Data[]).flatMap(artifact => artifact.source_ids ?? [])])];
+    return [...new Set([...voice, ...Object.values(revision.artifacts ?? {}).flatMap(artifact => artifact.source_ids ?? [])])];
   }
 
-  private inferredSources(base: Stored, changes: Data, dependencies: Data, direct: unknown): string[] {
+  private inferredSources(base: Revision, changes: DimensionText, dependencies: Dependencies, direct: unknown): string[] {
     if (!Array.isArray(direct) || direct.some(id => typeof id !== 'string')) return this.invalid('source_ids deve ser uma lista de IDs.');
     const found = new Set<string>(direct);
     if (base.profile_revision_id) for (const id of this.get('profile_revision', base.workspace_id, base.profile_revision_id).source_ids) found.add(id);
@@ -860,7 +885,7 @@ export class Arena implements ArenaService {
     return [...found];
   }
 
-  private commitRevision(branch: Stored, revision: Stored): void {
+  private commitRevision(branch: Branch, revision: Revision): void {
     this.insert('revision', revision);
     branch.current_revision_id = revision.id;
     this.update('branch', branch);
@@ -877,14 +902,14 @@ export class Arena implements ArenaService {
     return { revision_id: revision.id };
   }
 
-  private validateLocks(value: unknown, fields: Data): Data {
+  private validateLocks(value: unknown, fields: DimensionText): DimensionText {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return this.invalid('Travas inválidas.');
     for (const [dimension, content] of Object.entries(value)) {
       if (!dimensions.includes(dimension as any) || typeof content !== 'string' || fields[dimension] !== content) {
         this.invalid('Uma trava deve preservar o valor aceito da dimensão.');
       }
     }
-    return { ...value };
+    return { ...value } as DimensionText;
   }
 
   private validateDimensions(value: unknown): string[] {
@@ -922,7 +947,7 @@ export class Arena implements ArenaService {
     const branch = this.get('branch', workspace, input.branch_id);
     const revision = this.get('revision', workspace, input.revision_id);
     if (revision.branch_id !== branch.id) this.notFound();
-    for (const artifact of Object.values(revision.artifacts) as Data[]) {
+    for (const artifact of Object.values(revision.artifacts)) {
       this.validateSourceIds(workspace, artifact.source_ids);
       if (artifact.needs_review) throw new ArenaError('STALE_DEPENDENCY', 'Há artefatos que exigem revisão antes da exportação.');
     }
@@ -933,18 +958,18 @@ export class Arena implements ArenaService {
   private compareBranches(workspace: string, input: Data): Data {
     const leftBranch = this.get('branch', workspace, input.left_branch_id);
     const rightBranch = this.get('branch', workspace, input.right_branch_id);
-    const left = this.sanitize(this.get('revision', workspace, input.left_revision_id), workspace);
-    const right = this.sanitize(this.get('revision', workspace, input.right_revision_id), workspace);
+    const left: Revision = this.sanitize(this.get('revision', workspace, input.left_revision_id), workspace);
+    const right: Revision = this.sanitize(this.get('revision', workspace, input.right_revision_id), workspace);
     if (left.branch_id !== leftBranch.id || right.branch_id !== rightBranch.id) this.notFound();
     const ancestors = new Set<string>();
-    let cursor: Stored | null = left;
+    let cursor: Revision | null = left;
     while (cursor) {
       ancestors.add(cursor.id);
       cursor = cursor.parent_revision_id ? this.get('revision', workspace, cursor.parent_revision_id) : null;
     }
     cursor = right;
     while (cursor && !ancestors.has(cursor.id)) cursor = cursor.parent_revision_id ? this.get('revision', workspace, cursor.parent_revision_id) : null;
-    const summary = (revision: Stored) => ({ branch_id: revision.branch_id, revision_id: revision.id, fields: revision.fields });
+    const summary = (revision: Revision) => ({ branch_id: revision.branch_id, revision_id: revision.id, fields: revision.fields });
     const criteria = input.criteria ?? ['clareza', 'adequação ao público', 'consistência de voz', 'suporte factual'];
     if (!Array.isArray(criteria) || criteria.some(item => typeof item !== 'string')) this.invalid('Critérios inválidos.');
     return { left: summary(left), right: summary(right), common_base: cursor ? { id: cursor.id, branch_id: cursor.branch_id } : null,
@@ -954,14 +979,14 @@ export class Arena implements ArenaService {
         left: Object.keys(left.artifacts).filter(dimension => left.artifacts[dimension].needs_review),
         right: Object.keys(right.artifacts).filter(dimension => right.artifacts[dimension].needs_review) }, criteria };
   }
-  private validateDependencies(value: unknown, changes: Data): Data {
+  private validateDependencies(value: unknown, changes: DimensionText): Dependencies {
     if (value === undefined) return {};
     if (!value || typeof value !== 'object' || Array.isArray(value)) return this.invalid('Dependências inválidas.');
     for (const [dimension, upstream] of Object.entries(value)) {
       if (!Object.hasOwn(changes, dimension) || !Array.isArray(upstream) ||
         upstream.some(item => !dimensions.includes(item) || item === dimension)) this.invalid('Dependências inválidas.');
     }
-    return { ...value };
+    return { ...value } as Dependencies;
   }
   private validateSourceIds(workspace: string, value: unknown): string[] {
     if (!Array.isArray(value) || value.some(id => typeof id !== 'string')) return this.invalid('source_ids deve ser uma lista de IDs.');
@@ -971,11 +996,11 @@ export class Arena implements ArenaService {
     }
     return [...new Set(value)];
   }
-  private expectHead(branch: Stored, expected: unknown): void {
+  private expectHead(branch: Branch, expected: unknown): void {
     this.requireText(expected, 'expected_revision');
     if (branch.current_revision_id !== expected) this.conflict(branch, expected);
   }
-  private conflict(branch: Stored, base: unknown): never {
+  private conflict(branch: Branch, base: unknown): never {
     throw new ArenaError('REVISION_CONFLICT', 'A ramificação avançou. Compare e reapresente a proposta.',
       { branch_id: branch.id, base_revision_id: base, current_revision_id: branch.current_revision_id },
       false, 'Releia a revisão atual antes de propor ou decidir.');
@@ -1016,7 +1041,7 @@ export class Arena implements ArenaService {
     const branch = this.get('branch', workspace, branch_id);
     const revision_id = result.revision_id ?? input.revision_id ?? input.base_revision_id ?? branch.current_revision_id;
     const revision = this.get('revision', workspace, revision_id);
-    const source_ids = [...new Set((Object.values(revision.artifacts) as Data[]).flatMap(artifact => artifact.source_ids ?? []))];
+    const source_ids = [...new Set((Object.values(revision.artifacts)).flatMap(artifact => artifact.source_ids ?? []))];
     const id = randomUUID();
     let session_id: string | null = null;
     if (result.proposal_id) {
@@ -1035,21 +1060,21 @@ export class Arena implements ArenaService {
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
-  private get(type: string, workspace: string, id: unknown): Stored {
+  private get<T extends RecordType>(type: T, workspace: string, id: unknown): RecordRegistry[T] {
     if (typeof id !== 'string') this.invalid('Identificador obrigatório.');
     const row = this.db.prepare('SELECT data FROM records WHERE id = ? AND workspace_id = ? AND type = ?').get(id, workspace, type);
     if (!row) return this.notFound();
     return JSON.parse(String(row.data));
   }
-  private list(type: string, workspace: string): Stored[] {
+  private list<T extends RecordType>(type: T, workspace: string): RecordRegistry[T][] {
     return this.db.prepare('SELECT data FROM records WHERE workspace_id = ? AND type = ? ORDER BY rowid').all(workspace, type)
       .map(row => JSON.parse(String(row.data)));
   }
-  private insert(type: string, record: Stored): void {
+  private insert<T extends RecordType>(type: T, record: RecordRegistry[T]): void {
     this.db.prepare('INSERT INTO records (id, workspace_id, type, data) VALUES (?, ?, ?, ?)')
       .run(record.id, record.workspace_id, type, JSON.stringify(record));
   }
-  private update(type: string, record: Stored): void {
+  private update<T extends RecordType>(type: T, record: RecordRegistry[T]): void {
     this.db.prepare('UPDATE records SET data = ? WHERE id = ? AND workspace_id = ? AND type = ?')
       .run(JSON.stringify(record), record.id, record.workspace_id, type);
   }

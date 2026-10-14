@@ -7,7 +7,7 @@ import { createMcpServer } from '../src/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
-async function referenceHost(page: any, url: string, context: any, arena: Arena, credentials: any, capabilities: any = { serverTools: {}, updateModelContext: { text: {} }, message: { text: {} } }) {
+async function referenceHost(page: any, url: string, context: any, arena: Arena, credentials: any, capabilities: any = { serverTools: {}, updateModelContext: { text: {} }, message: { text: {} } }, hooks: { afterReadEvents?: () => Promise<void> } = {}) {
   const server = createMcpServer(arena, credentials.agent_token, { workspace_id: credentials.workspace_id });
   const client = new Client({ name: 'reference-widget-client', version: '1.0.0' });
   const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(a); await client.connect(b);
@@ -15,7 +15,9 @@ async function referenceHost(page: any, url: string, context: any, arena: Arena,
   await page.exposeFunction('fixtureCall', async (name: string, input: any) => {
     requests.push(name);
     expect(input.workspace_id).toBe(credentials.workspace_id);
-    return client.callTool({ name, arguments: input });
+    const result = await client.callTool({ name, arguments: input });
+    if (name === 'arena.read_events') await hooks.afterReadEvents?.();
+    return result;
   });
   await page.exposeFunction('fixtureContext', (input: any) => { updates.push(input); return {}; });
   await page.exposeFunction('fixtureMessage', (input: any) => { messages.push(input); return {}; });
@@ -67,4 +69,30 @@ test('restriction updates automatically clear embedded proposal text and the lat
     await expect(text).toHaveValue(''); await expect.poll(() => host!.updates.at(-1)?.structuredContent.action).toBe('selection_clear');
     expect(host.updates.at(-1).structuredContent.selection).toBeNull(); expect(JSON.stringify(host.updates.at(-1)).includes('ideia')).toBe(false); expect(host.messages).toHaveLength(0);
   } finally { await host?.close(); await viewer.close(); arena.close(); }
+});
+
+
+test('an event read finishing after revocation never restores a restricted selection to model context', async ({ page }) => {
+  const arena = new Arena(':memory:'); const credentials = arena.bootstrap({ workspace_name: 'Oficina fictícia', owner_name: 'Autora exemplo' });
+  const scope = { workspace_id: credentials.workspace_id };
+  const source = arena.execute('human.import_sources', credentials.owner, { ...scope, format: 'json', content: JSON.stringify([{ text: 'Referência fictícia.' }]), origin: 'Arquivo fictício', rights: 'Autorizado', usage_scope: 'Arena', coverage: 'Amostra', idempotency_key: 'source' }).source_ids[0];
+  const created = arena.execute('arena.create_exploration', credentials.agent, { ...scope, title: 'Proposta fictícia', objective: 'Reavaliar seleção', idempotency_key: 'create' });
+  arena.execute('arena.submit_proposal', credentials.agent, { ...scope, branch_id: created.branch_id, expected_revision: created.revision_id, base_revision_id: created.revision_id, changes: { text: 'Uma ideia usa a referência.' }, source_ids: [source], rationale: 'Proposta fictícia', idempotency_key: 'proposal' });
+  const context = arena.execute('arena.open_artifact', credentials.agent, { ...scope, branch_id: created.branch_id });
+  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; }); let eventReadStarted = false;
+  const viewer = await startHttpServer({ arena, workspace_id: credentials.workspace_id, port: 0 }); let host;
+  try {
+    host = await referenceHost(page, viewer.url, context, arena, credentials, undefined,
+      { afterReadEvents: async () => { eventReadStarted = true; await held; } });
+    const text = host.frame.getByRole('textbox', { name: 'Texto da proposta' });
+    await expect(text).toHaveValue('Uma ideia usa a referência.'); await text.dblclick({ position: { x: 65, y: 20 } });
+    await expect.poll(() => eventReadStarted).toBe(true);
+    arena.execute('human.revoke_source', credentials.owner, { ...scope, source_id: source, expected_revision: 1, reason: 'Retirar permissão', idempotency_key: 'revoke' });
+    await expect(text).toHaveValue(''); const afterRevocation = host.updates.length;
+    release();
+    await expect.poll(() => host!.updates.some(update => update.structuredContent.action === 'selection_clear')).toBe(true);
+    expect(host.updates.slice(afterRevocation).every(update => update.structuredContent.selection === null)).toBe(true);
+    expect(host.updates.some(update => update.structuredContent.selection?.text === 'ideia')).toBe(false);
+    expect(host.messages).toHaveLength(0);
+  } finally { release(); await host?.close(); await viewer.close(); arena.close(); }
 });
