@@ -1,12 +1,12 @@
 # Arena nos clientes Codex e ChatGPT
 
-A Arena mantém o contexto editorial em SQLite local. A conversa continua no cliente escolhido; o MCP lê contexto e registra propostas. O visualizador mostra artefatos e comparação. Aceitar uma proposta, editar o estado aceito, mudar travas ou aprovar voz exige login humano no visualizador local. O token de agente usado pelo widget não recebe essas permissões.
+A Arena mantém o contexto editorial em SQLite local. A conversa continua no cliente escolhido; o MCP lê contexto e registra propostas. O visualizador mostra somente o texto atual e permite seleção nativa pelo cursor. Revisão, comparação e demais ações acontecem na conversa pela skill Arena. Decisões humanas usam um canal CLI local independente, quando o harness pode executar comandos; o token de agente do widget não recebe essas permissões.
 
 Os exemplos abaixo são instruções para a máquina do proprietário. Esta implementação não altera configurações pessoais, inicia modelos, conecta redes sociais, publica o plugin ou abre túneis. Claude fica adiado. SDK e host de referência são evidência técnica; instalação e uso real de Codex/ChatGPT permanecem verificações separadas.
 
 ## Preparar dados e credenciais locais
 
-Use Node 24.15 ou posterior na linha 24; a execução foi verificada com Node 24.21. `node:sqlite` tem estabilidade release candidate. Instale dependências e compile no checkout:
+Use Node 24.15 ou posterior na linha 24; a execução foi verificada com Node 24.21. `node:sqlite` tem estabilidade release candidate. Antes do merge, use o checkout da branch `codex/implement-arena-v1`; `main` ainda é o bootstrap. Instale dependências e compile nessa revisão:
 
 ```sh
 npm ci
@@ -21,7 +21,7 @@ Os comandos `init` e `agent` mostram caminhos, nunca os valores dos tokens. Por 
 
 `arena.json` contém somente versão, workspace e caminho da base. `owner.token` é a credencial humana local; `agent.token` é o agente inicial. Identidades nomeadas ficam em `agents/codex.token` e `agents/chatgpt.token`, com tokens diferentes e autoria separada. `agent --name` usa a credencial humana local para convidar um agente e lê a revisão atual de membros antes da escrita. Nome já provisionado não é redefinido.
 
-Abra `http://127.0.0.1:8787` na mesma máquina, consulte o arquivo `owner.token` localmente e use o login humano do visualizador. Esse segredo não deve ser inserido no chat ou na configuração MCP. A UI usa cookie HttpOnly/SameSite=Strict e valida a origem das escritas. `serve --port 0` escolhe porta livre e mostra a URL. Outros processos MCP usam a mesma base por transações SQLite e revisões esperadas.
+Abra `http://127.0.0.1:8787` na mesma máquina, consulte o arquivo `owner.token` localmente e use o login humano do visualizador. Esse segredo não deve ser inserido no chat ou na configuração MCP. Esse login serve somente para abrir o texto e persistir a seleção; a UI não tem ações editoriais. A UI usa cookie HttpOnly/SameSite=Strict e valida a origem das escritas. `serve --port 0` escolhe porta livre e mostra a URL. Outros processos MCP usam a mesma base por transações SQLite e revisões esperadas.
 
 ## Codex: MCP stdio
 
@@ -60,9 +60,9 @@ O formato novo usa `plugin.json` e `mcp.json` na raiz, com seus schemas Agent Pl
 
 `arena.open_artifact` retorna contexto autorizado da revisão, texto/JSON útil e apresentação. O recurso `ui://arena/artifact/v1.html` usa `text/html;profile=mcp-app`; `presentation.ui_support` indica `advertised` ou `not_advertised` com base nas capacidades anunciadas do host. “Advertised” não afirma que a UI apareceu. O HTML compilado é autocontido; a ponte faz operações MCP, sem buscar o cookie humano do viewer.
 
-Em um host compatível, a UI usa `App.connect`, `callServerTool`, `updateModelContext` e, no gesto explícito de pedir uma revisão, `sendMessage`. O host pode aplicar contexto apenas no próximo turno e conservar somente a última atualização. Eventos persistidos de `arena.record_interaction`/`arena.read_events` mantêm o histórico; `since_cursor` lê eventos posteriores ao checkpoint, enquanto `cursor` percorre uma página do mesmo snapshot.
+Em um host compatível, a UI usa `App.connect`, `callServerTool` e `updateModelContext` para ler o texto e persistir seleção. Selecionar automaticamente atualiza o contexto, sem `sendMessage` nem início de turno. O host pode aplicar contexto apenas no próximo turno e conservar somente a última atualização. Eventos persistidos de `arena.record_interaction`/`arena.read_events` mantêm o histórico; `since_cursor` lê eventos posteriores ao checkpoint, enquanto `cursor` percorre uma página do mesmo snapshot.
 
-Seleção/comentário da UI embutida identifica o agente autenticado e uma origem de UI não verificada. Não é aceite humano. Alterações embutidas são propostas pendentes. O botão de revisão humana abre ou mostra a URL local sem segredo; a pessoa faz login independente e decide sobre a versão exibida. Se o host não renderizar MCP Apps ou não abrir um link localhost, usar os resultados estruturados e abrir o visualizador local manualmente. Fonte: [UI MCP Apps no ChatGPT](https://developers.openai.com/plugins/build/chatgpt-ui), [referência de visibilidade e permissões](https://developers.openai.com/plugins/reference).
+Seleção da UI embutida identifica o agente autenticado e uma origem de UI não verificada; não é aceite humano. O viewer não tem edição, comentários, botões de revisão, aceite, navegação ou drawers. A seleção vazia limpa o trecho anterior e inclui revisão-base/proposta/versão exatas quando presentes. Se o host não renderizar MCP Apps ou não abrir um link localhost, use os resultados estruturados e abra o visualizador local manualmente. Fonte: [UI MCP Apps no ChatGPT](https://developers.openai.com/plugins/build/chatgpt-ui), [referência de visibilidade e permissões](https://developers.openai.com/plugins/reference).
 
 As dependências estão fixadas em SDK `1.32.1` e ext-apps `1.7.5`. ext-apps v1 aceita SDK `^1.29.0`; React é opcional para este viewer vanilla. ext-apps latest v2 exige SDK dividido v2, portanto não atualizar essa dependência isoladamente. Metadados: [registro ext-apps 1.7.5](https://registry.npmjs.org/@modelcontextprotocol%2fext-apps/1.7.5).
 
@@ -76,12 +76,37 @@ ChatGPT web/hospedado precisa alcançar um endpoint HTTPS Streamable HTTP ou um 
 
 `127.0.0.1` se refere à máquina do processo/navegador que acessa o endereço. O serviço num ambiente remoto de desenvolvimento não aparece automaticamente no localhost do proprietário ou de outro dispositivo. A iframe embutida tem origem isolada; CSP não concede acesso ao cookie humano local nem substitui CORS. Não alterar essas fronteiras para afirmar integração. Para este piloto, servidor, banco e visualizador local ficam na máquina escolhida pelo proprietário; endpoint remoto, OAuth e túnel são trabalho posterior.
 
+## Comandos da skill e canal humano local
+
+No Codex, `$arena revisar o trecho selecionado` invoca a skill; `/skills` permite selecionar Arena e enviar o pedido. No ChatGPT, use `@Arena`/seletor de skills quando disponível. `iniciar`, `revisar`, `comparar`, `ramificar`, `aceitar`, `rejeitar`, `voz`, `fontes` e `exportar` são argumentos interpretados pela skill, não novos slash commands registrados. Fontes: [skills nos plugins](https://developers.openai.com/plugins/build/skills), [comandos do Codex](https://learn.chatgpt.com/docs/developer-commands?surface=cli).
+
+Para decisões numa conversa com shell local autorizado (Codex ou ChatGPT Work), o processo CLI lê `owner.token` de forma privada. O modelo não deve ler o arquivo, solicitar seu conteúdo ou passar tokens por argumentos/MCP. O usuário instrui a decisão sobre a versão apresentada; a skill monta apenas argumentos editoriais e executa:
+
+```sh
+node /CAMINHO/arena/dist/cli.js call --operation human.decide_proposal --input-file /CAMINHO/PRIVADO/decisao.json --data-dir /CAMINHO/PRIVADO/arena
+```
+
+Exemplo de arquivo privado de argumentos:
+
+```json
+{
+  "idempotency_key": "decisao-concreta-unica",
+  "proposal_id": "ID-APRESENTADO",
+  "presented_version": 1,
+  "expected_revision": "HEAD-LIDO",
+  "expected_head_revision": "HEAD-LIDO",
+  "decision": "accepted"
+}
+```
+
+O canal injeta o workspace local, recusa tokens de agente e não permite identidade nos argumentos ou operações de convite/revogação de membros. `ARENA_OWNER_TOKEN_FILE` seleciona somente um arquivo humano já configurado pelo proprietário; nunca herda `ARENA_AGENT_TOKEN_FILE`. Resultado incerto se recupera pelo mesmo CLI com `arena.get_operation` e a chave original, porque consultas de operação são por ator. Um conflito preserva a alternativa pendente e exige reapresentar o estado antes de uma nova decisão; não avance o head automaticamente.
+
+Uma seleção ou crítica não autoriza aceite. A instrução explícita já fornecida sobre a versão basta para a ação concreta, sem nova confirmação genérica. Aprovar voz, retirar travas, importar/revogar fontes, reutilizar artefatos invalidados e exportar texto aceito também usam argumentos concretos pelo CLI, conforme [a referência da skill](../skills/arena/references/local-editorial-channel.md).
+
+ChatGPT conectado apenas por MCP pode ler, propor, selecionar e exportar contexto. Sem shell local autorizado ou outro canal humano independente configurado, mantém decisões pendentes; este piloto não oferece OAuth humano remoto. O login de setup do viewer local não transforma a credencial MCP em humana.
+
 ## Verificar a passagem Codex → ChatGPT
 
-1. Escolher amostra fictícia ou, após autorização e política de retenção, uma pequena amostra real. Criar voz aprovada A, aceitar texto A e ramificar B de uma revisão exata com voz/travas fixadas.
-2. No Codex real, confirmar a conexão Arena, ler B e fontes permitidas, submeter proposta e observar a autoria e o estado pendente. Encerrar a conversa.
-3. No ChatGPT real, confirmar instalação/conexão na superfície escolhida e ler o mesmo contexto externo. Pedir crítica/proposta sem transferir o chat inteiro. Abrir o artefato quando houver renderização; selecionar um trecho e solicitar revisão explicitamente.
-4. Conferir que eventos do widget têm autoria de agente e que nenhuma proposta foi aceita automaticamente. O humano usa o viewer autenticado, compara A/B e aceita a versão apresentada; o estado anterior e a alternativa continuam conservados.
-5. Registrar versões dos clientes, revisão/IDs de operações, etapa efetivamente observada, falhas e julgamento editorial. Sem logs/tokens privados. Configurado, autenticado, leitura verificada, operação testada e renderização observada são fatos separados.
+Siga [o roteiro nativo](native-client-pilot.md): conexão real, proposta Codex, seleção do texto exato, pedido na conversa, releitura do mesmo contexto pelo ChatGPT e decisão humana por canal independente. Registre separadamente configuração, autenticação, leitura, operação e renderização efetivamente observadas.
 
-Os testes usam clientes **SDK** e um host de referência. Não certificam contas, disponibilidade de ferramentas, instalação de plugin ou execução nativa do Codex/ChatGPT. Até a passagem acima acontecer nos clientes do proprietário, registrar “não verificado”; Claude continua adiado.
+Os testes usam clientes **SDK** e um host de referência. Não certificam contas, disponibilidade de ferramentas, instalação de plugin ou execução nativa do Codex/ChatGPT. Até a passagem acontecer nos clientes do proprietário, registre “não verificado”; Claude continua adiado.
