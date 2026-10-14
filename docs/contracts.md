@@ -17,7 +17,7 @@ All requests use snake_case JSON. Every mutation takes `workspace_id` and `idemp
 - `arena.propose_profile_change`: profile_revision_id, expected_revision (=profile_revision_id), changes, evidence_source_ids, rationale. Returns `{proposal_id,version,status}` without changing voice.
 - `arena.export_context`: branch_id, revision_id. Returns `{package: <read_context plus relevant rejections and source metadata>,markdown,checksum}`. Validates current permissions; historical package is data, not authorization.
 - `arena.get_operation`: workspace_id,idempotency_key. Returns `{found,result?}` scoped to authenticated actor.
-- `arena.list_profiles`: workspace_id. Returns `{profiles:[{id,name,current_revision_id,revisions:[{id,version,content}]}]}`.
+- `arena.list_profiles`: workspace_id. Returns `{profiles:[{id,name,current_revision_id,revisions:[{id,version,content}]}],proposals}`. Voice proposals expose their exact ID, base revision, version, changes, evidence, rationale and status for human comparison before approval; current source restrictions apply to both arrays.
 
 ## Human operations
 
