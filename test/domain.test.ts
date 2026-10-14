@@ -339,3 +339,117 @@ test('approved voice revisions remain immutable and branches stay pinned when a 
     assert.equal(f.context(exploration.branch_id).profile.id, profile.profile_revision_id);
   } finally { f.cleanup(); }
 });
+
+test('credentials embedded at any offset or JSON key are rejected before mutation', () => {
+  const f = fixture();
+  try {
+    const input = { branch_id: f.created.branch_id, base_revision_id: f.created.revision_id,
+      expected_revision: f.created.revision_id, changes: { text: 'Rascunho fictício' }, dependencies: { text: [] },
+      rationale: 'Razão fictícia', source_ids: [] };
+    for (const token of [f.credentials.owner_token, f.credentials.agent_token]) {
+      for (const prefix of ['prefix', '', 'x', 'a'.repeat(44)]) {
+        assert.throws(() => f.call('arena.submit_proposal', { ...input, rationale: prefix + token + 'suffix' }), { code: 'INVALID_INPUT' });
+        assert.throws(() => f.call('arena.submit_proposal', { ...input,
+          session_metadata: { provider: 'fixture', client_name: 'Cliente fictício', [prefix + token + 'suffix']: 'declaração' }
+        }), { code: 'INVALID_INPUT' });
+      }
+    }
+    assert.equal(f.context().proposals.length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('restricted declared session and source metadata stay redacted in saved pages and replays after restart', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'arena-metadata-'));
+  const database = join(directory, 'arena.sqlite');
+  let arena = new Arena(database);
+  const credentials = arena.bootstrap({ workspace_name: 'Oficina fictícia', owner_name: 'Autora exemplo' });
+  const scope = { workspace_id: credentials.workspace_id };
+  let counter = 0;
+  const call = (operation: string, input: Record<string, any> = {}, actor = credentials.owner) =>
+    arena.execute(operation, actor, { ...scope, idempotency_key: `metadata-${counter++}`, ...input });
+  try {
+    const quotation = 'Trecho fictício cuja permissão será retirada';
+    const declared = 'Declaração derivada sem cópia literal';
+    const source = call('human.import_sources', { format: 'json', content: JSON.stringify([{ text: quotation, date: declared }]),
+      origin: 'Arquivo fictício', rights: 'Autorizado', usage_scope: 'Arena', coverage: 'Uma referência' }).source_ids[0];
+    const created = call('arena.create_exploration', { title: 'Exploração fictícia', objective: 'Reavaliar declarações' });
+    for (let index = 0; index < 2; index++) call('arena.submit_proposal', { branch_id: created.branch_id,
+      base_revision_id: created.revision_id, expected_revision: created.revision_id, changes: { text: 'Texto derivado' },
+      dependencies: { text: [] }, rationale: 'Referência fictícia', source_ids: [source],
+      session_metadata: { provider: quotation, client_name: declared, client_version: declared, external_session_id: declared }
+    }, credentials.agent);
+    const pageInput = { branch_id: created.branch_id, limit: 1 };
+    const page = call('arena.read_context', pageInput, credentials.agent);
+    const exportInput = { branch_id: created.branch_id, revision_id: created.revision_id, idempotency_key: 'cached-export' };
+    // A mutation replay also returns source metadata through its integration result.
+    const importInput = { format: 'json', content: JSON.stringify([{ text: 'Outra referência', date: quotation }]),
+      origin: 'Arquivo fictício', rights: 'Autorizado', usage_scope: 'Arena', coverage: quotation, idempotency_key: 'metadata-import' };
+    call('human.import_sources', importInput);
+    const check = () => {
+      for (const result of [call('arena.read_context', { branch_id: created.branch_id }, credentials.agent),
+        call('arena.read_context', { ...pageInput, cursor: page.next_cursor }, credentials.agent),
+        call('arena.export_context', exportInput, credentials.agent), call('human.list_sources'),
+        call('human.import_sources', importInput), call('arena.get_operation', { idempotency_key: 'metadata-import' })]) {
+        const serialized = JSON.stringify(result);
+        assert.equal(serialized.includes(quotation), false);
+        assert.equal(serialized.includes(declared), false);
+      }
+      const session = call('arena.read_context', { branch_id: created.branch_id }, credentials.agent).sessions[0];
+      assert.equal(session.id, page.sessions[0].id);
+      assert.equal(session.input_revision_id, created.revision_id);
+      assert.deepEqual(session.author, credentials.agent);
+      assert.equal(session.verification, 'declared');
+    };
+    call('human.revoke_source', { source_id: source, expected_revision: 1, reason: 'Retirar permissão' });
+    check();
+    arena.close(); arena = new Arena(database); check();
+    call('human.remove_source', { source_id: source, expected_revision: 2, reason: 'Remover referência' });
+    check();
+    arena.close(); arena = new Arena(database); check();
+  } finally { arena.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('human edits reject unavailable inferred dependency and pinned voice sources without advancing or recording an operation', () => {
+  for (const provenance of ['dependency', 'voice']) {
+    const f = fixture();
+    try {
+      const source = f.call('human.import_sources', { format: 'json', content: JSON.stringify([{ text: 'Referência fictícia' }]),
+        origin: 'Arquivo fictício', rights: 'Autorizado', usage_scope: 'Arena', coverage: 'Uma referência' }).source_ids[0];
+      let branch_id = f.created.branch_id;
+      if (provenance === 'dependency') f.edit({ theme: 'Tema com referência' }, { theme: [] }, { source_ids: [source] });
+      else {
+        const content = { identity: 'Autora fictícia', objectives: 'Explicar', tone: 'Direto', vocabulary: [], positive_examples: [], negative_examples: [], rules: [] };
+        const profile = f.call('human.create_profile', { name: 'Voz fictícia', content, source_ids: [source] });
+        branch_id = f.call('arena.create_exploration', { title: 'Exploração com voz', objective: 'Escrever', profile_revision_id: profile.profile_revision_id }).branch_id;
+      }
+      const before = f.context(branch_id);
+      f.call('human.revoke_source', { source_id: source, expected_revision: 1, reason: 'Retirar permissão' });
+      const input = { branch_id, expected_revision: before.revision.id, changes: { text: 'Novo texto derivado' },
+        dependencies: { text: provenance === 'dependency' ? ['theme'] : [] }, source_ids: [], reason: 'Revisão humana', idempotency_key: 'unavailable-edit' };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        assert.throws(() => f.call('human.edit_branch', input), { code: 'SOURCE_UNAVAILABLE' });
+        assert.equal(f.context(branch_id).revision.id, before.revision.id);
+        assert.equal(f.call('arena.get_operation', { idempotency_key: input.idempotency_key }).found, false);
+      }
+      assert.throws(() => f.call('arena.submit_proposal', { ...input, base_revision_id: before.revision.id,
+        rationale: 'Proposta derivada', idempotency_key: 'unavailable-proposal' }, f.credentials.agent), { code: 'SOURCE_UNAVAILABLE' });
+    } finally { f.cleanup(); }
+  }
+});
+
+test('source restrictions redact declared providers while preserving the canonical integration provider enum', () => {
+  const f = fixture();
+  try {
+    f.call('human.record_verification', { provider: 'codex', stage: 'configured', expected_revision: 1, evidence: 'Configuração fictícia declarada' });
+    const source = f.call('human.import_sources', { format: 'json', content: JSON.stringify([{ text: 'codex' }]),
+      origin: 'Arquivo fictício', rights: 'Autorizado', usage_scope: 'Arena', coverage: 'Uma referência' }).source_ids[0];
+    f.call('arena.submit_proposal', { branch_id: f.created.branch_id, base_revision_id: f.created.revision_id,
+      expected_revision: f.created.revision_id, changes: { text: 'Texto fictício' }, dependencies: { text: [] }, source_ids: [source],
+      rationale: 'Proposta com referência', session_metadata: { provider: 'codex', client_name: 'Cliente fictício' } }, f.credentials.agent);
+    for (const [operation, expected_revision] of [['human.revoke_source', 1], ['human.remove_source', 2]] as const) {
+      f.call(operation, { source_id: source, expected_revision, reason: 'Retirar referência' });
+      assert.equal(f.call('human.integration_status').integrations.find((integration: any) => integration.provider === 'codex')?.state, 'configured');
+      assert.equal(f.context().sessions[0].provider, '');
+    }
+  } finally { f.cleanup(); }
+});

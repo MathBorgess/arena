@@ -5,7 +5,11 @@ const element = (tag, attributes = {}) => {
   }
   return node;
 };
-const identity = artifact => JSON.stringify([artifact.branch_id, artifact.revision_id, artifact.proposal_id ?? null, artifact.presented_version ?? null, artifact.text, artifact.redacted ?? false]);
+/** @typedef {{branch_id: string, revision_id: string, proposal_id?: string, presented_version?: number}} ArtifactReference */
+/** @returns {ArtifactReference} */
+const artifactReference = artifact => ({ branch_id: artifact.branch_id, revision_id: artifact.revision_id,
+  ...(artifact.proposal_id ? { proposal_id: artifact.proposal_id, presented_version: artifact.presented_version } : {}) });
+const identity = artifact => JSON.stringify([artifactReference(artifact), artifact.text, artifact.redacted ?? false]);
 
 /** A read-only text surface. Every editorial request stays in the harness. */
 export function mountArena({ call, onContext, mode = 'local', root = document.getElementById('arena') }) {
@@ -13,31 +17,36 @@ export function mountArena({ call, onContext, mode = 'local', root = document.ge
   const status = element('p', { role: 'status', hidden: true, 'aria-live': 'polite' });
   root.replaceChildren(text, status);
   let current, parameters, lastSelection = null, lastSeen = 'null', timer, applying = false, stopped = false;
-  let sequence = Promise.resolve();
+  let sequence = Promise.resolve(), generation = 0;
   const announce = message => { status.textContent = message ?? ''; status.hidden = !message; };
   async function contextSnapshot(snapshot) { if (onContext) await onContext(snapshot); }
   async function record(artifact, selection) {
-    const input = { branch_id: artifact.branch_id, revision_id: artifact.revision_id, expected_revision: artifact.current_revision_id,
-      ...(artifact.proposal_id ? { proposal_id: artifact.proposal_id, presented_version: artifact.presented_version } : {}),
+    const isCurrent = () => current && (!selection || !current.artifact.redacted) && identity(current.artifact) === identity(artifact);
+    const input = { ...artifactReference(artifact), expected_revision: artifact.current_revision_id,
       type: selection ? 'selection' : 'selection_clear', dimension: 'text', selection, idempotency_key: crypto.randomUUID() };
     try {
       const result = await call(mode === 'embedded' ? 'arena.record_interaction' : 'human.record_artifact_interaction', input);
-      if (!current || identity(current.artifact) !== identity(artifact)) return;
+      if (!isCurrent()) return;
       let event, eventCursor;
       if (onContext) {
         let cursor;
         do { const page = await call('arena.read_events', { branch_id: artifact.branch_id, limit: 100, ...(cursor ? { cursor } : {}) });
+          if (!isCurrent()) return;
           event = page.events.find(item => item.id === result.event_id); eventCursor = page.event_cursor; cursor = page.next_cursor;
         } while (!event && cursor);
+        if (!event) throw new Error('Não foi possível confirmar a seleção registrada. Selecione o trecho novamente.');
+        if (event.redacted) { clear(); return; }
       }
-      await contextSnapshot({ branch_id: artifact.branch_id, revision_id: artifact.revision_id,
-        ...(artifact.proposal_id ? { proposal_id: artifact.proposal_id, presented_version: artifact.presented_version } : {}),
-        selection, action: input.type, event_id: result.event_id, ...(eventCursor ? { event_cursor: eventCursor } : {}),
+      if (!isCurrent()) return;
+      await contextSnapshot({ ...artifactReference(artifact),
+        selection: event ? event.selection ?? null : selection, action: event?.type ?? input.type, event_id: result.event_id, ...(eventCursor ? { event_cursor: eventCursor } : {}),
         ...(event ? { author: event.author, ui_origin: event.ui_origin } : {}) });
       announce();
     } catch (error) {
+      if (!isCurrent()) return;
       // Do not leave a failed or restricted passage as active model context.
-      await contextSnapshot({ branch_id: artifact.branch_id, revision_id: artifact.revision_id, selection: null, action: 'selection_clear', persisted: false });
+      applying = true; text.setSelectionRange(0, 0); lastSelection = null; lastSeen = 'null'; applying = false;
+      await contextSnapshot({ ...artifactReference(artifact), selection: null, action: 'selection_clear', persisted: false });
       announce(error.message ?? 'Não foi possível registrar a seleção.');
       if (['ACCESS_DENIED', 'NOT_FOUND', 'SOURCE_UNAVAILABLE'].includes(error.code)) clear();
     }
@@ -55,19 +64,19 @@ export function mountArena({ call, onContext, mode = 'local', root = document.ge
   }
   for (const event of ['select', 'mouseup', 'keyup']) text.addEventListener(event, selectionChanged);
   function clear() {
+    generation++;
     const previous = current?.artifact; clearTimeout(timer); current = undefined; applying = true;
     text.value = ''; text.setSelectionRange(0, 0); lastSelection = null; lastSeen = 'null'; applying = false;
-    if (previous) void contextSnapshot({ branch_id: previous.branch_id, revision_id: previous.revision_id, selection: null, action: 'selection_clear', persisted: false }).catch(() => {});
+    if (previous) void contextSnapshot({ ...artifactReference(previous), selection: null, action: 'selection_clear', persisted: false }).catch(() => {});
   }
   async function show(context, input) {
     if (!context.artifact) throw new Error('O servidor não forneceu o texto exato do artefato.');
+    generation++;
     const previous = current?.artifact; const changed = !previous || identity(previous) !== identity(context.artifact);
     const hadSelection = lastSelection !== null;
     current = context;
-    parameters = input ?? (context.presentation?.follow_current === false ? {
-      branch_id: context.artifact.branch_id,
-      ...(context.artifact.proposal_id ? { proposal_id: context.artifact.proposal_id, presented_version: context.artifact.presented_version } : { revision_id: context.artifact.revision_id })
-    } : { branch_id: context.artifact.branch_id });
+    parameters = input ?? (context.presentation?.follow_current === false
+      ? artifactReference(context.artifact) : { branch_id: context.artifact.branch_id });
     if (changed) {
       const scroll = text.scrollTop; const pagePosition = window.scrollY;
       clearTimeout(timer); applying = true; text.value = context.artifact.text; text.setSelectionRange(0, 0);
@@ -81,8 +90,14 @@ export function mountArena({ call, onContext, mode = 'local', root = document.ge
   }
   async function refresh() {
     if (!parameters || stopped) return;
-    try { await show(await call('arena.open_artifact', parameters), parameters); }
-    catch (error) { clear(); announce(error.message ?? 'Artefato indisponível.'); }
+    const requested = parameters, pending = ++generation;
+    try {
+      const context = await call('arena.open_artifact', requested);
+      if (pending === generation && !stopped) await show(context, requested);
+    } catch (error) {
+      if (pending !== generation || stopped) return;
+      clear(); announce(error.message ?? 'Artefato indisponível.');
+    }
   }
   const poll = setInterval(() => { if (!document.hidden && !stopped) void refresh(); }, 1500);
   window.addEventListener('pagehide', () => { stopped = true; clearInterval(poll); clearTimeout(timer); }, { once: true });
