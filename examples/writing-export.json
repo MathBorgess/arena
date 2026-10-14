@@ -1,0 +1,20 @@
+[
+  {
+    "text": "Uma ideia ganha força quando fica simples de explicar. Hoje testei duas formas de apresentar o mesmo problema e escolhi a mais clara.",
+    "origin": "fictional://pilot/post-01",
+    "author": "Autor Piloto",
+    "date": "2026-10-01",
+    "rights": "Exemplo fictício criado para este projeto; uso permitido no piloto",
+    "usage_scope": "voice_and_reference",
+    "coverage": "Amostra fictícia selecionada: 1 de 2 exemplos"
+  },
+  {
+    "text": "Mudar o tema sem perder a voz começa por escolher o que deve permanecer. A comparação ajuda a perceber onde a mudança fez diferença.",
+    "origin": "fictional://pilot/post-02",
+    "author": "Autor Piloto",
+    "date": "2026-10-02",
+    "rights": "Exemplo fictício criado para este projeto; uso permitido no piloto",
+    "usage_scope": "voice_and_reference",
+    "coverage": "Amostra fictícia selecionada: 2 de 2 exemplos"
+  }
+]
