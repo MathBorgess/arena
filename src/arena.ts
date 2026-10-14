@@ -93,8 +93,8 @@ export class Arena implements ArenaService {
     this.checkInputCredentials(input, workspace);
     switch (operation) {
       case 'arena.list_work': return this.paginate('list_work', persisted, workspace, input, this.listWork(workspace, input), ['explorations']);
-      case 'arena.read_context': return this.paginate('read_context', persisted, workspace, input, this.readContext(workspace, input), ['proposals', 'decisions', 'feedback', 'events', 'sources']);
-      case 'arena.open_artifact': return { ...this.paginate('read_context', persisted, workspace, input, this.readContext(workspace, input), ['proposals', 'decisions', 'feedback', 'events', 'sources']), presentation: {
+      case 'arena.read_context': return this.paginate('read_context', persisted, workspace, input, this.readContext(workspace, input), ['proposals', 'decisions', 'feedback', 'events', 'sources', 'sessions']);
+      case 'arena.open_artifact': return { ...this.paginate('read_context', persisted, workspace, input, this.readContext(workspace, input), ['proposals', 'decisions', 'feedback', 'events', 'sources', 'sessions']), presentation: {
         resource_uri: 'ui://arena/artifact.html', format: 'mcp-apps', requires_host_support: true,
         fallback: 'local_authenticated_viewer', human_actions_require_authentication: true } };
       case 'arena.read_events': return this.paginate('read_events', persisted, workspace, input, this.readEvents(workspace, persisted, input), ['events']);
@@ -294,6 +294,7 @@ export class Arena implements ArenaService {
       profile, proposals, decisions, feedback,
       sources: this.list('source', workspace).filter(source => source_ids.has(source.id)).map(source => this.sourceMetadata(source)),
       events: this.list('event', workspace).filter(event => event.branch_id === branch.id),
+      sessions: this.list('session', workspace).filter(session => session.branch_id === branch.id),
       open_questions: feedback.filter(item => item.type === 'question').map(item => ({ id: item.id, text: item.text, source_ids: item.source_ids })),
       next_action: proposals.some(proposal => proposal.status === 'pending')
         ? 'Revise as propostas pendentes e solicite uma decisão humana.' : 'Proponha um próximo passo para esta exploração.',
@@ -315,9 +316,27 @@ export class Arena implements ArenaService {
     }
     const proposal: Stored = { id: randomUUID(), workspace_id: workspace, branch_id: branch.id,
       base_revision_id: base.id, version: 1, status: 'pending', changes, dependencies, rationale, source_ids,
-      warnings: input.warnings ?? [], author: actor, created_at: this.now(), origin_proposal_id: null };
+      warnings: [...(input.warnings ?? [])], author: actor, created_at: this.now(), origin_proposal_id: null };
+    if (branch.profile_revision_id) proposal.warnings.push('A fidelidade às regras qualitativas da voz exige avaliação humana.');
+    if (input.session_metadata !== undefined) {
+      const metadata = input.session_metadata;
+      if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) this.invalid('Metadados da sessão inválidos.');
+      for (const key of ['provider', 'client_name']) {
+        if (typeof metadata[key] !== 'string' || !metadata[key].trim() || metadata[key].length > 200) this.invalid('Declare o provedor e o nome do cliente.');
+      }
+      for (const key of ['external_session_id', 'client_version']) if (metadata[key] !== undefined &&
+        (typeof metadata[key] !== 'string' || !metadata[key].trim() || metadata[key].length > 200)) this.invalid('Metadado opcional da sessão inválido.');
+      const session: Stored = { id: randomUUID(), workspace_id: workspace, branch_id: branch.id,
+        provider: metadata.provider, client_name: metadata.client_name, external_session_id: metadata.external_session_id ?? null,
+        ...(metadata.client_version ? { client_version: metadata.client_version } : {}),
+        input_revision_id: base.id, source_ids, proposal_ids: [proposal.id], verification: 'declared',
+        author: actor, created_at: this.now() };
+      this.insert('session', session);
+      proposal.session_id = session.id;
+    }
     this.insert('proposal', proposal);
-    return { proposal_id: proposal.id, version: proposal.version, status: proposal.status };
+    return { proposal_id: proposal.id, version: proposal.version, status: proposal.status,
+      ...(proposal.session_id ? { session_id: proposal.session_id } : {}) };
   }
 
   private addFeedback(workspace: string, actor: Actor, input: Data): Data {
@@ -376,6 +395,7 @@ export class Arena implements ArenaService {
       const previous = this.get('revision', workspace, branch.current_revision_id);
       const revision = this.changedRevision(previous, acceptedProposal.changes, acceptedProposal.dependencies, acceptedProposal.source_ids, proposal.author);
       revision.author = actor;
+      if (proposal.session_id) for (const dimension of Object.keys(acceptedProposal.changes)) revision.artifacts[dimension].session_id = proposal.session_id;
       this.insert('revision', revision);
       branch.current_revision_id = revision.id;
       this.update('branch', branch);
@@ -481,8 +501,8 @@ export class Arena implements ArenaService {
       this.insert('snapshot', snapshot);
     }
     const result = { ...payload };
-    for (const key of arrays) result[key] = payload[key].slice(offset, offset + limit);
-    result.next_cursor = arrays.some(key => payload[key].length > offset + limit)
+    for (const key of arrays) result[key] = (payload[key] ?? []).slice(offset, offset + limit);
+    result.next_cursor = arrays.some(key => (payload[key] ?? []).length > offset + limit)
       ? Buffer.from(JSON.stringify({ id: snapshot.id, offset: offset + limit })).toString('base64url') : null;
     return result;
   }
@@ -598,7 +618,7 @@ export class Arena implements ArenaService {
     const blank = (item: any): any => typeof item === 'string' ? '' : Array.isArray(item) ? [] : item && typeof item === 'object'
       ? Object.fromEntries(Object.entries(item).map(([key, entry]) => [key, blank(entry)])) : item;
     const sensitive = new Set(['content', 'changes', 'rationale', 'comment', 'text', 'reason', 'selection', 'markdown', 'name', 'warnings']);
-    const identifiers = new Set(['id', 'kind', 'role', 'type', 'operation', 'status', 'date', 'created_at', 'resource_uri',
+    const identifiers = new Set(['id', 'kind', 'role', 'type', 'operation', 'status', 'state', 'provider', 'verification', 'date', 'created_at', 'resource_uri',
       'next_cursor', 'event_cursor', 'checksum', 'dimension', 'dependencies', 'selected_dimensions', 'vary_dimensions', 'source_ids', '_arena_source_ids']);
     const scrub = (item: any, key = ''): any => {
       if (typeof item === 'string') return key.endsWith('_id') || identifiers.has(key) ? item
@@ -960,8 +980,13 @@ export class Arena implements ArenaService {
     const revision = this.get('revision', workspace, revision_id);
     const source_ids = [...new Set((Object.values(revision.artifacts) as Data[]).flatMap(artifact => artifact.source_ids ?? []))];
     const id = randomUUID();
+    let session_id: string | null = null;
+    if (result.proposal_id) {
+      const row = this.db.prepare("SELECT data FROM records WHERE id = ? AND workspace_id = ? AND type = 'proposal'").get(result.proposal_id, workspace);
+      if (row) session_id = JSON.parse(String(row.data)).session_id ?? null;
+    }
     this.insert('event', { id, event_id: id, workspace_id: workspace, artifact_id: branch_id, branch_id,
-      revision_id, type: operation.split('.')[1], operation, source_ids, author: actor, created_at: this.now(),
+      revision_id, type: operation.split('.')[1], operation, source_ids, session_id, author: actor, created_at: this.now(),
       references: Object.fromEntries(Object.entries(result).filter(([key]) => key.endsWith('_id') || ['version', 'status'].includes(key))),
       human_decision: operation === 'human.decide_proposal' ? input.decision : null });
   }

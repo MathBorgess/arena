@@ -53,6 +53,32 @@ test('exact branches preserve locks and origin while dependency changes require 
   } finally { f.cleanup(); }
 });
 
+test('declared native-client sessions preserve input revision and actual proposal authorship without becoming authorization', () => {
+  const f = fixture();
+  try {
+    const input = { idempotency_key: 'session-proposal', branch_id: f.created.branch_id, base_revision_id: f.created.revision_id,
+      expected_revision: f.created.revision_id, changes: { text: 'Rascunho de uma sessão fictícia' }, dependencies: { text: [] },
+      rationale: 'Contexto externo declarado', source_ids: [], session_metadata: {
+        provider: 'codex', client_name: 'Cliente fictício', external_session_id: 'fixture-session-1', actor: f.credentials.owner
+      } };
+    const proposal = f.call('arena.submit_proposal', input, f.credentials.agent);
+    assert.deepEqual(f.call('arena.submit_proposal', input, f.credentials.agent), proposal);
+    const context = f.context();
+    const session = context.sessions[0];
+    assert.equal(context.sessions.length, 1);
+    assert.equal(proposal.session_id, session.id);
+    assert.equal(session.external_session_id, 'fixture-session-1');
+    assert.deepEqual(session.author, f.credentials.agent);
+    assert.equal(session.input_revision_id, f.created.revision_id);
+    assert.equal(session.verification, 'declared');
+    assert.equal(context.proposals[0].session_id, session.id);
+    const accepted = f.call('human.decide_proposal', { proposal_id: proposal.proposal_id, presented_version: proposal.version,
+      expected_revision: f.created.revision_id, expected_head_revision: f.created.revision_id, decision: 'accepted' });
+    assert.equal(f.context().revision.artifacts.text.session_id, session.id);
+    assert.equal(f.context().revision.id, accepted.revision_id);
+  } finally { f.cleanup(); }
+});
+
 test('revoking a voice reference invalidates text derived from the pinned voice and records the permission change for the agent', () => {
   const f = fixture();
   try {
