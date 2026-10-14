@@ -28,4 +28,10 @@ O percurso Codex → ChatGPT real e a qualidade editorial são trabalho separado
 
 ## Resultado final
 
-Registrar aqui os resultados do build, checks, testes e revisão depois que a simplificação estiver integrada.
+Validação das correções em `f30f735`, integradas em `acb54d8` com árvore idêntica: `npm run check`, `npm run build`, `npm test` (**42/42**) e `npm run test:ui` (**8/8**) passaram. Os oito cenários de navegador incluem respostas atrasadas, conflito de seleção, proposta nova e revogação, preservando a interface somente de texto.
+
+O teste adicional do pacote compilado usou processos CLI reais e cliente SDK stdio: descobriu **15 ferramentas de agente**, abriu a proposta atual, registrou seleção, recuperou eventos, leu o recurso UI autocontido e aceitou a versão exata pelo CLI humano independente. O diretório fictício foi removido após encerrar os clientes. Nenhuma credencial foi impressa.
+
+A revisão final apontou cinco itens no eixo Standards (duas violações e três heurísticas) e dois no eixo Spec. Todos foram tratados por um único implementador, com regressões públicas e validação focada; não houve segunda rodada ampla de revisão. Ver `docs/review.md` para os eixos separados, prioridades e resoluções.
+
+Entrega técnica: [PR Arena #7](https://github.com/MathBorgess/arena/pull/7). Integração: [PR ai-tools-catalog #2](https://github.com/MathBorgess/ai-tools-catalog/pull/2), em draft até a implementação chegar à `main` da Arena e permitir avançar o gitlink conforme as regras do catálogo. Os tickets técnicos fecham pelo merge do PR; o pai e o piloto nativo permanecem abertos enquanto esse piloto não for executado.
