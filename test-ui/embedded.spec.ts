@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { Arena } from '../src/arena.js';
 import { startHttpServer } from '../src/http.js';
 
-async function referenceHost(page: any, url: string, context: any, arena: Arena, credentials: any) {
+async function referenceHost(page: any, url: string, context: any, arena: Arena, credentials: any, capabilities: any = { serverTools: {}, updateModelContext: { text: {} }, message: { text: {} } }) {
   const updates: any[] = []; const messages: any[] = []; const requests: string[] = [];
   await page.exposeFunction('fixtureCall', async (name: string, input: any) => {
     requests.push(name);
@@ -16,7 +16,7 @@ async function referenceHost(page: any, url: string, context: any, arena: Arena,
   await page.exposeFunction('fixtureMessage', (input: any) => { messages.push(input); return {}; });
   const host = await build({ stdin: { contents: `import {AppBridge,PostMessageTransport} from '@modelcontextprotocol/ext-apps/app-bridge';
 const frame=document.querySelector('iframe');
-const bridge=new AppBridge(null,{name:'Arena SDK reference host',version:'1.0.0'},{serverTools:{},updateModelContext:{text:{}},message:{text:{}}});
+const bridge=new AppBridge(null,{name:'Arena SDK reference host',version:'1.0.0'},${JSON.stringify(capabilities)});
 bridge.oncalltool=({name,arguments:input})=>window.fixtureCall(name,input);
 bridge.onupdatemodelcontext=input=>window.fixtureContext(input);
 bridge.onmessage=input=>window.fixtureMessage(input);
@@ -73,6 +73,7 @@ test('embedded passage actions preserve agent authorship and request another tur
     await expect.poll(() => host.updates.length).toBe(1);
     expect(host.updates[0].structuredContent.author).toEqual(credentials.agent);
     expect(host.updates[0].structuredContent.ui_origin).toBe('unverified');
+    expect(host.updates[0].structuredContent.event_cursor).toEqual(expect.any(String));
     expect(host.updates[0].structuredContent.selection).toEqual({ start: 4, end: 9, text: 'ideia' });
     expect(host.messages).toHaveLength(0);
     await host.frame.getByRole('button', { name: 'Revisar trecho' }).click();
@@ -81,5 +82,24 @@ test('embedded passage actions preserve agent authorship and request another tur
     const events = arena.execute('arena.read_events', credentials.agent, { ...scope, branch_id: created.branch_id }).events;
     expect(events.find((event: any) => event.type === 'request_revision').author).toEqual(credentials.agent);
     expect(arena.execute('arena.read_context', credentials.agent, { ...scope, branch_id: created.branch_id }).revision.id).toBe(context.revision.id);
+  } finally { await viewer.close(); arena.close(); }
+});
+
+
+test('an MCP Apps host without context or message capabilities persists the comment and reports the fallback honestly', async ({ page }) => {
+  const arena = new Arena(':memory:'); const credentials = arena.bootstrap({ workspace_name: 'Oficina fictícia', owner_name: 'Autora exemplo' });
+  const scope = { workspace_id: credentials.workspace_id };
+  const created = arena.execute('arena.create_exploration', credentials.agent, { ...scope, title: 'Capacidades limitadas', objective: 'Não prometer outra execução', idempotency_key: 'create' });
+  arena.execute('human.edit_branch', credentials.owner, { ...scope, branch_id: created.branch_id, expected_revision: created.revision_id, changes: { text: 'Uma ideia abre uma conversa.' }, source_ids: [], reason: 'Texto fictício', idempotency_key: 'edit' });
+  const context = arena.execute('arena.read_context', credentials.agent, { ...scope, branch_id: created.branch_id });
+  const viewer = await startHttpServer({ arena, workspace_id: credentials.workspace_id, port: 0 });
+  try {
+    const host = await referenceHost(page, viewer.url, context, arena, credentials, { serverTools: {} });
+    const text = host.frame.getByLabel('Texto do artefato'); await text.evaluate((node: HTMLTextAreaElement) => { node.focus(); node.setSelectionRange(4, 9); node.dispatchEvent(new Event('select', { bubbles: true })); });
+    await host.frame.getByLabel('Comentário sobre o trecho').fill('Uma referência para o próximo turno.'); await host.frame.getByRole('button', { name: 'Registrar comentário' }).click();
+    await expect(host.frame.getByRole('status')).toContainText('Este host não oferece atualização de contexto');
+    await host.frame.getByRole('button', { name: 'Revisar trecho' }).click(); await expect(host.frame.getByRole('status')).toContainText('Este host não permite solicitar outra resposta');
+    expect(host.messages).toHaveLength(0); expect(host.updates).toHaveLength(0);
+    expect(arena.execute('arena.read_events', credentials.agent, { ...scope, branch_id: created.branch_id }).events.some((event: any) => event.type === 'request_revision')).toBe(true);
   } finally { await viewer.close(); arena.close(); }
 });

@@ -56,7 +56,7 @@ export async function startHttpServer({ arena, workspace_id, port = 8787, mcpHan
         return json(404, { code: 'NOT_FOUND', message: 'Rota não encontrada.' });
       }
       if (request.method !== 'GET' && request.method !== 'HEAD') return json(405, { code: 'INVALID_INPUT', message: 'Método indisponível.' });
-      const asset = ({ '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] } as Record<string, string[]>)[path];
+      const asset = ({ '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/parse-export.js': ['parse-export.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] } as Record<string, string[]>)[path];
       if (!asset) return json(404, { code: 'NOT_FOUND', message: 'Rota não encontrada.' });
       const content = await readFile(`${webRoot}${asset[0]}`);
       response.writeHead(200, { 'Content-Type': `${asset[1]}; charset=utf-8` }); response.end(request.method === 'HEAD' ? undefined : content);
