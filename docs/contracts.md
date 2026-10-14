@@ -42,8 +42,20 @@ All requests use snake_case JSON. Every mutation takes `workspace_id` and `idemp
 
 Cross-workspace or unauthorized IDs return NOT_FOUND without revealing existence. Idempotency lookup requires current authorization and returns only sanitized prior responses; do not retain/replay invite tokens. All mutations and audit records commit in one SQLite transaction. Same actor/key/target/arguments replay the result; changed arguments return IDEMPOTENCY_CONFLICT. Concurrent proposals may coexist; acceptance requires unchanged presented base/head and returns REVISION_CONFLICT without losing proposals.
 
-## Transport
+## Artifact interaction extension
 
-HTTP binds `127.0.0.1` only. `/api/login` takes `{token}`, authenticates a human and sets an HttpOnly SameSite=Strict cookie; state-changing requests check exact loopback Origin; no tokens in URLs. `/api/call` takes `{operation,input}` and passes the authenticated actor; `/api/session` returns `{actor,workspace_id}` with no credentials; `/api/logout` removes the session. Domain serialization uses ArenaError.toJSON(). Static files are served from web/ with CSP.
+The user has redirected presentation to a compact artifact viewer, with all conversation in the harness; see ADR 0002. Existing domain operations remain shared.
 
-MCP stdio exposes only agentOperations using SDK tool input schemas and connects with an independently provisioned agent token from an ignored, permissions-restricted credential file. It authenticates and rechecks workspace authorization on every request. Tool content gives structured result or structured actionable error; stdout contains protocol only. No human operation is registered. Configure native clients explicitly using examples in docs/mcp-clients.md; no changes to the user's client configurations during development.
+- `arena.open_artifact`: branch_id, optional revision_id. Returns exact authorized context and presentation metadata. Negotiate MCP Apps extension before claiming embedded rendering; expose useful structured output in every client. No tokens in the returned viewer location.
+- `arena.read_events`: workspace_id,branch_id, optional cursor/limit. Returns `{events,next_cursor,current_revision_id}`. Events identify the artifact, exact revision, authenticated author, timestamp, typed action and optional validated passage selection. Recheck permissions and redact revoked source-derived text on every read.
+- `human.record_artifact_interaction`: workspace_id,branch_id,revision_id,expected_revision,idempotency_key,type (`selection`/`comment`/`request_revision`), dimension, optional selection `{start,end,text}`, optional comment. Returns `{event_id,revision_id}`. Only an authenticated human channel can attribute it to a person; validate offsets against the exact referenced text. A selection/comment does not approve a proposal or implicitly change the voice profile.
+
+## Transport and viewer
+
+MCP exposes agent operations and the artifact read/event extensions. Authentication is independently scoped; identity never comes from tool arguments. Tool results include structured actionable errors. Stdio stdout contains protocol only. Native-client examples do not change the user's own configuration.
+
+The preferred visual surface in a verified MCP Apps-capable host is a `ui://` resource linked from the artifact tool. The component receives tool results, refreshes the artifact and persists relevant interactions through an authenticated channel. It supplies a compact context snapshot through `updateModelContext` when supported, while persistent events keep the complete history. The host may apply the update only at the next user message; requesting another agent action is explicit and uses a supported host message mechanism.
+
+A plugin packages MCP, companion skill and viewer resources in the selected client's format. It cannot guarantee embedded UI in a client that only supports tools. Keep actual client verification separate from SDK/reference-host tests.
+
+The local compatibility viewer binds `127.0.0.1` only and displays the selected artifact plus review/comparison controls; there is no chat or standalone editorial platform. It uses `/api/login` with a human token to establish an HttpOnly SameSite=Strict session, `/api/call` with `{operation,input}`, `/api/session` for authenticated non-secret session metadata, and `/api/logout`. State changes check the exact Origin; static assets use a restrictive CSP. Domain serialization uses ArenaError.toJSON(). MCP Apps app-only visibility must not bypass human session authorization.
