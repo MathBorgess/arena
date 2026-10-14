@@ -1,54 +1,53 @@
 # Piloto nos clientes nativos
 
-## Evidência técnica e evidência de clientes reais
+Estado inicial: **não executado nos clientes reais**. O piloto exige os clientes autenticados do proprietário. A implementação não iniciou modelos, alterou configurações pessoais ou consumiu assinatura/API. Qualidade editorial é julgada por humanos, separadamente dos testes técnicos.
+
+## Evidência técnica e de cliente real
 
 | Evidência | O que permite afirmar | O que permanece pendente |
 | --- | --- | --- |
-| Build, tipos e testes de domínio com dados fictícios | Os cenários cobertos respeitam contratos e estado persistido na versão do commit testado. | Qualidade editorial; acesso a conta; comportamento de uma versão real de host. |
-| Cliente MCP do SDK, em memória ou stdio | Descoberta, validação de schemas e operações funcionam no protocolo testado. | Participação de Codex ou ChatGPT nativos. |
-| Playwright sobre UI humana | Fluxos cobertos de revisão, comparação e autorização se comportam como observado. | Julgamento humano de voz e clareza; compatibilidade com conta de provedor. |
-| Comando/help local e configuração de exemplo | O formato de instalação foi consultado; a documentação está pronta. | Servidor instalado, autenticado e usado na conta do proprietário. |
-| Atestado do proprietário com IDs/instantes de operações de cliente real | O cliente/conta identificado executou a etapa atestada. | Etapas posteriores; disponibilidade permanente; integração social nativa. |
-| JSON/CSV fictício importado | A rota de arquivo testada aceita o formato e preserva a cobertura observada. | Formato de um export real; histórico completo; conexão API da rede. |
+| Build, tipos e domínio com SQLite/dados fictícios | Os cenários cobertos respeitam contratos, revisões e permissões no commit testado. | Qualidade editorial; conta; versão real do host. |
+| Cliente MCP SDK em memória, stdio ou HTTP | Descoberta, schemas e operações no protocolo testado. | Participação nativa de Codex/ChatGPT. |
+| CLI em subprocesso com credenciais fictícias locais | Canal humano separado, CAS, retry, recuperação e recusa de credencial agente. | Instrução humana real na conversa e shell disponível naquela superfície. |
+| Playwright no viewer local/host de referência | Texto, seleção nativa e persistência nos cenários cobertos. | Renderização MCP Apps no cliente real e julgamento humano. |
+| Documentação de instalação/configuração | Pacote preparado conforme fontes consultadas. | Plugin realmente instalado e autorizado no cliente. |
+| Atestado do proprietário com IDs/instantes reais | A etapa identificada foi observada naquele cliente. | Etapas posteriores e disponibilidade permanente. |
+| Importação JSON/CSV fictícia | Formato e cobertura da rota de arquivo testada. | Export real completo; conexão API social. |
 
-Só preencher evidências executadas. Registrar versão do código, versões dos clientes, IDs de exploração/ramificação/revisão/proposta/decisão e instante; nunca token, arquivo de credencial ou log integral com conteúdo privado. Se faltar confirmação da fronteira de testes, registrar “aguardando confirmação”, não “passou”.
-
-`human.record_verification` é atestado humano explícito, limitado à etapa efetivamente observada. Não tratar esse registro como detecção automática nem transformar fixture em estado de integração real. Separar `configurado`, `autenticado`, `leitura verificada` e `operação testada`, além de motivo de indisponibilidade e última verificação.
+Registre apenas evidência executada: commit, versões dos clientes, IDs, instante e falhas. Nunca guarde tokens ou logs integrais privados. Separe `configurado`, `autenticado`, `leitura verificada`, `operação testada` e `renderização observada`. Sessões persistidas com metadados de cliente são `declared`; não comprovam provedor real. `human.record_verification`, quando registrado separadamente pelo proprietário, é atestado explícito da etapa observada; o canal editorial `call` não o fabrica.
 
 ## Roteiro manual Codex → ChatGPT
 
-Estado inicial: **não executado nos clientes reais**. Requer o proprietário nos seus clientes autenticados; não inicia modelos nem consome assinatura/API durante a implementação. Marca e redes permanecem escolhas do proprietário. A qualidade editorial é decidida por humanos, separadamente dos testes técnicos.
+Antes do merge, use a branch `codex/implement-arena-v1`, pois `main` contém somente bootstrap. Consulte [a configuração dos clientes](mcp-clients.md) e [a política de dados](data-policy.md). O viewer deve conter apenas o texto atual e seleção pelo cursor; setup de autenticação é permitido, fluxo editorial não acontece por botões.
 
-1. Escolher a marca fictícia do primeiro piloto ou uma pequena amostra real autorizada após aceitar a política. Escolher objetivo editorial e critérios de comparação. Registrar cobertura parcial das fontes e separar textos próprios de re-shares/referências.
-2. Iniciar o serviço local e criar perfil de voz A na UI humana. Anotar seu `profile_revision_id`. Criar uma exploração que pode começar com tema/texto em aberto. Aceitar explicitamente uma proposta A; anotar os IDs da proposta, decisão e revisão.
-3. Provisionar credenciais Arena separadas para os dois clientes, ambas `kind:agent`; mantê-las fora do Git. Não distribuir token humano aos agentes. Instalar cada configuração somente por ação autorizada do proprietário. Não assumir que o ambiente de desenvolvimento e a máquina do proprietário compartilham paths ou credenciais.
-4. Criar B a partir da revisão aceita de A, variando tema ou nicho; fixar a mesma versão da voz e travar uma dimensão estruturada que ficará constante. Registrar revisão de origem, dimensões variadas, travas e base atual.
-5. Abrir uma conversa nova no Codex nativo. Conferir em `/mcp` a conexão Arena. Pedir descoberta de `arena.list_work`, leitura exata de B com `arena.read_context`, leitura de uma fonte permitida com `arena.read_source` e uma proposta com `arena.submit_proposal`. Usar chave de idempotência e revisão esperada. Observar a proposta pendente na UI com autoria Codex e fontes; nenhum aceite deve ocorrer pelo MCP.
-6. O humano registra uma crítica ou pergunta. Confirmar que feedback não avançou o estado aceito. Pedir ao Codex uma revisão localizada sobre a mesma base atual. Registrar IDs e conteúdo observável; não pedir/expor raciocínio privado do modelo.
-7. Exportar o contexto exato de B e encerrar a conversa Codex. Guardar o pacote apenas no local escolhido pelo proprietário. Registrar checksum e revisão; não transferir a conversa inteira.
-8. Abrir conversa nova no ChatGPT. Confirmar a conexão do plugin Arena na superfície correspondente. Entregar o pacote e a próxima ação solicitada. Pedir releitura de permissões e revisão atual via MCP antes de escrever; recuperar fontes extensas sob demanda. Solicitar crítica/alternativa e proposta de revisão com autoria ChatGPT. Observar na UI que o histórico de Codex e decisões humanas permaneceu acessível.
-9. Comparar A e B sobre revisões explícitas com `arena.compare_branches` ou UI; verificar base comum, diferenças, travas, voz fixada e itens “requer revisão”. Avaliar clareza, público, voz e sustentação factual. Tratar previsão de engajamento como hipótese.
-10. O humano aceita apenas dimensões/trechos selecionados através da UI, usando a versão apresentada e o head esperado. Confirmar decisão autenticada, proposta derivada no aceite parcial, preservação da alternativa original e nova revisão. Se houver conflito, comparar e reapresentar; não sobrescrever o trabalho anterior.
-11. Mudar uma entrada e observar invalidação do texto dependente; revisar ou decidir reutilização explícita na revisão atual. Confirmar que uma correção do post não criou silenciosamente uma versão de voz nem migrou as ramificações antigas.
-12. Exportar o texto revisado e o pacote, reabrir o contexto numa sessão nova e conferir IDs/proveniência/lacunas. O estado deve dizer “exportado”; não existe publicação ou agendamento na v1.
-13. Se houver fonte fictícia específica para verificação, revogá-la e confirmar bloqueio de leitura/exportação e marcação dos derivados. Se necessário, remover a fonte e realizar a verificação de remoção descrita acima. Nunca usar uma fonte real apenas para provocar um teste adversarial sem a autorização correspondente.
-14. Preencher o registro do piloto com etapas concluídas, falhas, instantes e IDs. Registrar a etapa real de cada cliente por `human.record_verification`. Marcar o piloto “passou” apenas se ambos executaram operações reais e o humano confirmou preservação do contexto, decisões, voz e travas. Falta de um cliente deixa a passagem “não verificada”, mesmo com suíte técnica verde.
+1. Escolha uma marca fictícia ou pequena amostra real autorizada. Defina objetivo, direitos, escopo e cobertura parcial das fontes. Separe textos próprios de referências/re-shares. Inicialize serviço/base privada na máquina escolhida.
+2. Provisione identidades Arena separadas para Codex e ChatGPT, ambas agente, e instale/configure os clientes por ação do proprietário. Guarde credenciais fora do Git. Não suponha que a máquina remota de desenvolvimento compartilha localhost, paths ou credenciais com os clientes.
+3. No Codex real, confirme a conexão Arena em `/mcp` e selecione a skill em `/skills` → Arena, ou use `$arena iniciar <objetivo>`. Confira descoberta e leitura via MCP. Peça `voz` e aprove uma versão concreta pela conversa com shell local autorizado. Anote `profile_revision_id`; iniciar pode deixar tema/texto em aberto.
+4. Peça uma proposta A, veja o texto atual no viewer e instrua `aceitar <proposta>, versão <N>` na conversa. O CLI lê a credencial humana de forma privada e usa proposta/versão/head exatos. Confira proposta, decisão e nova revisão; o MCP não aceita automaticamente. Se a superfície não tiver o canal humano independente, pare essa etapa com a proposta pendente.
+5. Peça `ramificar variando <dimensão>` a partir da revisão aceita A, mantendo voz e uma dimensão travada. Anote origem, ramificação B, revisão e travas. Use `comparar A com B` na conversa; avalie clareza, público, voz e sustentação factual. Previsão de engajamento permanece hipótese.
+6. Selecione um trecho do texto de B pelo cursor. Confira o evento com offsets UTF16, revisão-base e proposta/versão exibidas. Selecionar não envia mensagem nem inicia agente. Envie `$arena revisar o trecho selecionado para…` e confira proposta pendente contextualizada; uma seleção vazia deve limpar o trecho anterior. Crítica/pedido não altera o estado aceito.
+7. Peça `exportar contexto da revisão <ID>`, guarde o pacote no destino escolhido e anote checksum/lacunas. Encerre a conversa Codex. No ChatGPT real, confirme conexão na superfície correspondente e invoque `@Arena`/seletor quando disponível. Leia o mesmo contexto externo e permissões atuais antes de propor; não transfira o chat inteiro. Confira histórico, decisões, voz e travas.
+8. Observe a renderização embutida se o host suportar MCP Apps; caso contrário use o fallback local e registre renderização não observada. Faça seleção e envie a revisão na conversa. Registre autoria ChatGPT agente e proposta pendente. ChatGPT somente MCP não aceita sem outro canal humano independente; ChatGPT Work com shell local autorizado pode usar o mesmo CLI privado. Não trate a identidade do widget como humana.
+9. Instrua aceitar/rejeitar uma versão concreta na conversa pelo canal humano disponível. Para aceite parcial de texto, apresente primeiro proposta derivada do trecho; para dimensões use seleção explícita. Em conflito, compare/reapresente antes de nova decisão; preserve a alternativa. Corrigir um post não aprova voz nova nem migra ramificações antigas.
+10. Mude uma entrada e confirme invalidação dos artefatos dependentes. Revise ou autorize reutilização concreta na conversa. Exporte o texto aceito revisado e o contexto, reabra numa sessão nova e confira os mesmos IDs, fontes, lacunas e permissões atuais. Registre “exportado”, sem publicação/agendamento.
+11. Se necessário, revogue uma fonte fictícia e confira bloqueio de leitura/conteúdo derivado. Execute remoção só conforme política e instrução explícita. Preencha etapas observadas/falhas; só marque a passagem real como concluída quando ambos os clientes executaram operações e o humano confirmou preservação do contexto. Falta de um cliente/canal humano deixa o resultado parcial ou não verificado.
 
-Modelo mínimo de registro:
+## Registro mínimo
 
 ```text
 Commit: <hash>
 Workspace/exploração: <IDs>
-Marca/amostra e cobertura: <declaradas pelo proprietário>
+Marca/amostra/cobertura/direitos: <declarados pelo proprietário>
 Voz fixada: <profile_revision_id>
 A / B e origem: <branch_ids e revision_ids>
-Codex: <versão; etapa; instante; proposal_id; sem credenciais>
-ChatGPT: <versão; etapa; instante; proposal_id; sem credenciais>
-Decisão humana: <decision_id; versão apresentada; novo head>
+Codex: <versão; superfície; etapas; instante; proposal_id>
+ChatGPT: <versão; superfície; etapas; instante; proposal_id>
+Viewer: <local/embutido; renderização observada; evento de seleção>
+Canal humano: <shell local independente / indisponível>
+Decisão: <decision_id; proposta/versão apresentada; novo head>
 Exportação: <revision_id; checksum; lacunas>
 Resultado técnico: <comandos e cenários realmente executados>
-Resultado de clientes reais: <não executado / parcial / passou / falhou>
+Resultado real: <não executado / parcial / concluído / falhou>
 Julgamento editorial humano: <critérios e conclusão>
-Limitações e próxima ação: <concretas>
+Limitações/próxima ação: <concretas; sem credenciais>
 ```
-
