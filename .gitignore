@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.arena/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.env
+playwright-report/
+test-results/
