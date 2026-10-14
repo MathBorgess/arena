@@ -27,7 +27,7 @@ A base e os tokens ficam em um diretório persistente separado do cache do plugi
 
 ## Usar nos agentes
 
-O pacote inclui [plugin.json](plugin.json), [mcp.json](mcp.json) e a [skill Arena](skills/arena/SKILL.md). A configuração de cliente é uma ação explícita; baixar e compilar este repositório prepara o pacote.
+O pacote inclui [plugin.json](plugin.json), [mcp.json](mcp.json) e a [skill Arena](skills/arena/SKILL.md). A configuração de cliente é uma ação explícita; baixar e compilar este repositório prepara o pacote. O marketplace local está em `.agents/plugins/marketplace.json`. Depois de compilar e inicializar, você pode registrar o checkout com `codex plugin marketplace add /caminho/arena` e instalar com `codex plugin add arena@arena-local`; execute esses comandos na sua máquina quando desejar instalar. A execução desta implementação não os aplica à configuração pessoal.
 
 Siga [a configuração dos clientes](docs/mcp-clients.md) para iniciar o MCP com uma credencial de agente. A credencial humana permanece no canal de revisão. ChatGPT desktop local e ChatGPT web/hospedado têm requisitos de conexão distintos; a configuração local de Codex não torna o servidor acessível à web.
 
