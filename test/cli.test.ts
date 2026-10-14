@@ -2,17 +2,20 @@ import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { promisify } from 'node:util';
-import { mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { Arena } from '../src/arena.js';
 
 const exec = promisify(execFile);
 const cli = resolve('src/cli.ts');
-const run = (args: string[]) => exec(process.execPath, ['--import', 'tsx', cli, ...args], { cwd: resolve('.') });
+const run = (args: string[], env?: NodeJS.ProcessEnv) => exec(process.execPath, ['--import', 'tsx', cli, ...args], {
+  cwd: resolve('.'), ...(env ? { env: { ...process.env, ...env } } : {})
+});
 
 test('local setup creates restricted durable files without printing credentials or resetting an existing workspace', async t => {
   const parent = mkdtempSync(join(tmpdir(), 'arena-cli-'));
@@ -142,4 +145,63 @@ test('stdio setup refuses a human credential file instead of inheriting approval
   finally { await client.close(); }
   assert.match(stderr, /ACCESS_DENIED/);
   assert.equal(stderr.includes(readFileSync(join(directory, 'owner.token'), 'utf8').trim()), false);
+});
+
+test('a conversational human command accepts the exact proposal once and preserves a conflicting alternative', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'arena-cli-conversation-'));
+  await run(['init', '--data-dir', directory]);
+  const config = JSON.parse(readFileSync(join(directory, 'arena.json'), 'utf8'));
+  const ownerToken = readFileSync(join(directory, 'owner.token'), 'utf8').trim();
+  const arena = new Arena(config.database_path);
+  t.after(() => { arena.close(); rmSync(directory, { recursive: true, force: true }); });
+  const agent = arena.authenticate(readFileSync(join(directory, 'agent.token'), 'utf8').trim());
+  const scope = { workspace_id: config.workspace_id };
+  const created = arena.execute('arena.create_exploration', agent, {
+    ...scope, idempotency_key: 'start', title: 'Escolha fictícia', objective: 'Aceitar na conversa'
+  });
+  const proposal = (key: string, theme: string) => arena.execute('arena.submit_proposal', agent, {
+    ...scope, idempotency_key: key, branch_id: created.branch_id, base_revision_id: created.revision_id,
+    expected_revision: created.revision_id, changes: { theme }, rationale: 'Alternativa fictícia', source_ids: []
+  });
+  const a = proposal('a', 'Tema escolhido');
+  const b = proposal('b', 'Outro tema preservado');
+  const path = join(directory, 'input.json');
+  const call = async (operation: string, input: object) => {
+    writeFileSync(path, JSON.stringify(input), { mode: 0o600 });
+    return run(['call', '--operation', operation, '--input-file', path, '--data-dir', directory]);
+  };
+  const input = { idempotency_key: 'chat-accept', proposal_id: a.proposal_id, presented_version: a.version,
+    expected_revision: created.revision_id, expected_head_revision: created.revision_id, decision: 'accepted' };
+  const first = await call('human.decide_proposal', input);
+  const accepted = JSON.parse(first.stdout);
+  assert.ok(accepted.revision_id);
+  assert.deepEqual(JSON.parse((await call('human.decide_proposal', input)).stdout), accepted);
+  assert.deepEqual(JSON.parse((await call('arena.get_operation', { idempotency_key: 'chat-accept' })).stdout), {
+    found: true, result: accepted
+  });
+  await assert.rejects(call('human.decide_proposal', { ...input, idempotency_key: 'chat-stale', proposal_id: b.proposal_id }),
+    error => JSON.parse((error as any).stderr).error.code === 'REVISION_CONFLICT');
+  const context = JSON.parse((await call('arena.read_context', { branch_id: created.branch_id })).stdout);
+  assert.equal(context.revision.fields.theme, 'Tema escolhido');
+  assert.equal(context.proposals.find((item: any) => item.id === b.proposal_id).status, 'pending');
+  assert.equal(context.proposals.find((item: any) => item.id === b.proposal_id).changes.theme, 'Outro tema preservado');
+  assert.equal(first.stdout.includes(ownerToken) || first.stderr.includes(ownerToken), false);
+});
+
+test('the editorial CLI refuses delegated agent credentials, identity arguments and credential-issuing operations', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'arena-cli-editorial-auth-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  await run(['init', '--data-dir', directory]);
+  const path = join(directory, 'input.json');
+  const command = (operation: string) => ['call', '--operation', operation, '--input-file', path, '--data-dir', directory];
+  writeFileSync(path, '{}', { mode: 0o600 });
+  await assert.rejects(run(command('arena.list_work'), { ARENA_OWNER_TOKEN_FILE: join(directory, 'agent.token') }),
+    error => JSON.parse((error as any).stderr).error.code === 'ACCESS_DENIED' && (error as any).stdout === '');
+  await assert.rejects(run(command('human.invite_member')), error => JSON.parse((error as any).stderr).error.code === 'ACCESS_DENIED');
+  await assert.rejects(run(command('human.revoke_member')), error => JSON.parse((error as any).stderr).error.code === 'ACCESS_DENIED');
+  writeFileSync(path, JSON.stringify({ actor: { kind: 'human' } }));
+  await assert.rejects(run(command('arena.list_work')), error => JSON.parse((error as any).stderr).error.code === 'INVALID_INPUT');
+  writeFileSync(path, '{}');
+  const context = await run(command('arena.list_work'));
+  assert.equal(JSON.parse(context.stdout).explorations.length, 0);
 });

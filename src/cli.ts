@@ -9,6 +9,13 @@ import { startHttpServer } from './http.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
 interface LocalConfig { format_version: 1; workspace_id: string; database_path: string; membership_revision: number }
+const conversationalOperations = new Set([
+  'arena.list_work', 'arena.read_context', 'arena.read_source', 'arena.compare_branches', 'arena.list_profiles',
+  'arena.open_artifact', 'arena.read_events', 'arena.export_context', 'arena.get_operation',
+  'human.list_sources', 'human.integration_status', 'human.decide_proposal', 'human.edit_branch', 'human.set_locks',
+  'human.create_profile', 'human.approve_profile', 'human.import_sources', 'human.revoke_source', 'human.remove_source',
+  'human.review_artifacts', 'human.export_text', 'human.record_artifact_interaction'
+]);
 
 function invalid(message: string): never { throw new ArenaError('INVALID_INPUT', message); }
 function privateDirectory(path: string) {
@@ -34,7 +41,7 @@ function parseArguments(args: string[]) {
   for (let index = 1; index < args.length; index += 2) {
     const flag = args[index];
     const value = args[index + 1];
-    if (!['--data-dir', '--workspace-name', '--owner-name', '--agent', '--name', '--port'].includes(flag)
+    if (!['--data-dir', '--workspace-name', '--owner-name', '--agent', '--name', '--port', '--operation', '--input-file'].includes(flag)
       || value === undefined || value.startsWith('--') || flags.has(flag)) invalid('Argumentos inválidos. Consulte o comando help.');
     flags.set(flag, value);
   }
@@ -56,10 +63,33 @@ function agentName(value: string): string {
   return value;
 }
 
+function readInputFile(path: string): Record<string, unknown> {
+  if (!existsSync(path)) invalid('Arquivo de argumentos não encontrado.');
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 1_048_576) invalid('Use um arquivo JSON regular de até 1 MiB.');
+  let value: unknown;
+  try { value = JSON.parse(readFileSync(path, 'utf8')); }
+  catch { invalid('O arquivo de argumentos precisa conter JSON válido.'); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) invalid('Os argumentos precisam ser um objeto JSON.');
+  for (const key of ['actor', 'actor_id', 'kind', 'role', 'token', 'owner_token', 'agent_token', 'authorization']) {
+    if (Object.hasOwn(value, key)) invalid('Identidade e credenciais não podem ser fornecidas como argumentos.');
+  }
+  return value as Record<string, unknown>;
+}
+
+function withoutCredentials(value: unknown, ownerToken: string): unknown {
+  if (typeof value === 'string') return ownerToken ? value.replaceAll(ownerToken, '[REDACTED]') : value;
+  if (Array.isArray(value)) return value.map(item => withoutCredentials(item, ownerToken));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value)
+    .filter(([key]) => !/^(?:token|owner_token|agent_token|token_hash|password|credentials|api_key|authorization)$/i.test(key))
+    .map(([key, item]) => [key, withoutCredentials(item, ownerToken)]));
+  return value;
+}
+
 export async function runCli(args = process.argv.slice(2)): Promise<void> {
   const { command, flags, directory } = parseArguments(args);
   if (command === 'help') {
-    process.stdout.write('Arena: init | serve | mcp | agent --name codex|chatgpt\nOpções: --data-dir CAMINHO, --port PORTA, --agent NOME.\n');
+    process.stdout.write('Arena: init | serve | mcp | agent --name codex|chatgpt | call --operation OP --input-file JSON\nOpções: --data-dir CAMINHO, --port PORTA, --agent NOME.\n');
     return;
   }
   if (command === 'init') {
@@ -144,6 +174,29 @@ export async function runCli(args = process.argv.slice(2)): Promise<void> {
       config.membership_revision = invited.workspace_revision;
       writePrivate(join(directory, 'arena.json'), `${JSON.stringify(config, null, 2)}\n`);
       process.stdout.write(`Agente ${name} provisionado. Credencial privada: ${path}\n`);
+    } finally { arena.close(); }
+    return;
+  }
+  if (command === 'call') {
+    const operation = flags.get('--operation') ?? invalid('Informe --operation e --input-file.');
+    if (!conversationalOperations.has(operation)) throw new ArenaError('ACCESS_DENIED',
+      'Operação indisponível no canal editorial local.', {}, false, 'Use apenas leituras de artefato ou decisões editoriais autorizadas.');
+    const input = readInputFile(resolve(flags.get('--input-file') ?? invalid('Informe --input-file com os argumentos concretos.')));
+    const config = loadConfig(directory);
+    if (input.workspace_id !== undefined && input.workspace_id !== config.workspace_id) throw new ArenaError('ACCESS_DENIED', 'Workspace fora da configuração local.');
+    // This channel reads its own human credential; the MCP agent credential is never a fallback.
+    const ownerToken = readPrivate(resolve(process.env.ARENA_OWNER_TOKEN_FILE ?? join(directory, 'owner.token'))).trim();
+    const arena = new Arena(config.database_path);
+    try {
+      const owner = arena.authenticate(ownerToken);
+      if (owner.kind !== 'human') throw new ArenaError('ACCESS_DENIED', 'O comando editorial exige uma credencial humana independente.');
+      const result = arena.execute(operation, owner, { ...input, workspace_id: config.workspace_id });
+      process.stdout.write(`${JSON.stringify(withoutCredentials(result, ownerToken))}\n`);
+    } catch (error) {
+      if (error instanceof ArenaError) {
+        process.stderr.write(`${JSON.stringify({ error: withoutCredentials(error.toJSON(), ownerToken) })}\n`);
+        process.exitCode = 1;
+      } else throw error;
     } finally { arena.close(); }
     return;
   }
