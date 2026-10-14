@@ -2,6 +2,8 @@
 
 Status: accepted. Priority clients are Codex and ChatGPT; the owner explicitly confirmed MCP and artifact interaction test seams on 2026-10-14.
 
+Presentation and workflow controls below are superseded by ADR 0003: the viewer now contains only read-only current proposal text and automatic cursor-selection context. All messages and editorial commands belong in the harness. The independent local CLI supplies human authorization when that harness has shell access.
+
 The user wants a quick visualization of the artifact being modified, with direct interaction that becomes context for the existing agent. Keep all conversational work in that harness. Arena owns durable artifacts, revisions, proposals and interaction events, exposed through MCP.
 
 Package a companion skill, the MCP server and artifact viewer together where the client plugin format supports them. A plugin packages installation and workflow; it does not grant a host an interface renderer. Use the standard MCP Apps extension only when the host negotiates support. A compatible tool references a `ui://` resource; the host renders its HTML and brokers tool calls and context updates. The fallback is a compact local artifact viewer using the same domain state and operations. It has no chat, no autonomous agent runner and no hosting requirement.
