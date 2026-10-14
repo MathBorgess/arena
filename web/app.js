@@ -45,19 +45,49 @@ export function mountArena({ root = document.getElementById('arena'), call, mode
     const branches = el('select', { 'aria-label': 'Ramificação', onChange: event => run(() => load(event.target.value)) });
     for (const exploration of state.work) for (const branch of exploration.branches) branches.append(el('option', { value: branch.id, text: `${exploration.title} · ${branch.name}`, selected: branch.id === context.branch.id }));
     shell.append(el('p', { class: 'eyebrow', text: context.exploration.objective }), el('h1', { text: context.exploration.title }), el('div', { class: 'branchline' }, branches, el('span', { class: 'badge', text: `Revisão ${context.revision.id.slice(0, 8)}` })));
-    const text = el('textarea', { class: 'text-stage', 'aria-label': 'Texto do artefato', value: context.revision.fields.text, placeholder: 'O texto ganha forma aqui…', spellcheck: true });
+    const selectionPreview = el('div', { class: 'selection', hidden: true });
+    const captureSelection = (input, dimension) => {
+      if (input.value !== context.revision.fields[dimension]) { state.selection = null; selectionPreview.hidden = false; selectionPreview.textContent = 'Salve ou proponha a edição antes de selecionar um trecho desta revisão.'; return; }
+      if (input.selectionStart === input.selectionEnd) return;
+      state.selection = { dimension, start: input.selectionStart, end: input.selectionEnd, text: input.value.slice(input.selectionStart, input.selectionEnd) };
+      selectionPreview.textContent = `Trecho selecionado: ${state.selection.text}`; selectionPreview.hidden = false;
+    };
+    const text = el('textarea', { onSelect: event => captureSelection(event.target, 'text'), class: 'text-stage', 'aria-label': 'Texto do artefato', value: context.revision.fields.text, placeholder: 'O texto ganha forma aqui…', spellcheck: true });
     const stage = el('section', { class: 'stage', 'aria-label': 'Artefato' }, field('Texto', text));
     const dimensions = el('details', {}, el('summary', { text: 'Direção editorial' }));
     const grid = el('div', { class: 'dimensions' });
-    for (const [dimension, label] of Object.entries(labels)) if (dimension !== 'text') grid.append(field(label, el('textarea', { rows: 2, value: context.revision.fields[dimension], 'data-dimension': dimension })));
+    for (const [dimension, label] of Object.entries(labels)) if (dimension !== 'text') grid.append(field(label, el('textarea', { onSelect: event => captureSelection(event.target, dimension), rows: 2, value: context.revision.fields[dimension], 'data-dimension': dimension })));
     dimensions.append(grid); stage.append(dimensions);
+    const collectChanges = () => { const changes = {}; if (text.value !== context.revision.fields.text) changes.text = text.value; grid.querySelectorAll('[data-dimension]').forEach(input => { if (input.value !== context.revision.fields[input.dataset.dimension]) changes[input.dataset.dimension] = input.value; }); return changes; };
+    const comment = el('textarea', { rows: 2, placeholder: 'O que precisa mudar neste trecho?' });
+    async function record(type) {
+      const { dimension = 'text', ...selection } = state.selection ?? {};
+      const event = await mutate(mode === 'local' ? 'human.record_artifact_interaction' : 'arena.record_interaction', { branch_id: context.branch.id, revision_id: context.revision.id, expected_revision: context.branch.current_revision_id, type, dimension, ...(state.selection ? { selection } : {}), ...(comment.value.trim() ? { comment: comment.value } : {}) });
+      const events = onContext ? await call('arena.read_events', { branch_id: context.branch.id, limit: 500 }) : null;
+      const persisted = events?.events.find(item => item.id === event.event_id);
+      const warning = await onContext?.({ branch_id: context.branch.id, revision_id: context.revision.id, event_id: event.event_id, event_cursor: events?.next_cursor ?? null, author: persisted?.author, ui_origin: persisted?.ui_origin, action: type, dimension, ...(state.selection ? { selection } : {}), ...(comment.value.trim() ? { comment: comment.value } : {}) });
+      return warning;
+    }
+    stage.append(selectionPreview, field('Comentário sobre o trecho', comment), el('div', { class: 'actions' },
+      button('Guardar seleção', () => run(async () => { if (!state.selection) return announce('Selecione um trecho do artefato.'); const warning = await record('selection'); announce(`Seleção registrada; disponível para o agente pelo MCP.${warning ? ` ${warning}` : ''}`); })),
+      button('Registrar comentário', () => run(async () => { if (!comment.value.trim()) return announce('Escreva um comentário.'); const warning = await record('comment'); announce(`Comentário registrado; disponível para o agente pelo MCP.${warning ? ` ${warning}` : ''}`); })),
+      button('Revisar trecho', () => run(async () => { if (!state.selection) return announce('Selecione um trecho do artefato.'); const warning = await record('request_revision'); if (requestReview) { const result = await requestReview({ branch_id: context.branch.id, revision_id: context.revision.id, selection: state.selection }); announce(result || `Pedido de revisão enviado ao harness.${warning ? ` ${warning}` : ''}`); } else announce('Pedido registrado. Peça ao agente que leia os eventos pelo MCP.'); }))));
+    if (mode === 'local') {
+      const reason = el('input', { placeholder: 'Por que esta edição?' });
+      stage.append(field('Motivo da edição', reason), button('Salvar revisão', () => run(async () => {
+        const changes = collectChanges(); if (!Object.keys(changes).length) return announce('Nenhuma alteração para salvar.');
+        if (!reason.value.trim()) return announce('Informe o motivo da edição.');
+        await mutate('human.edit_branch', { branch_id: context.branch.id, expected_revision: context.revision.id, changes, source_ids: [], reason: reason.value });
+        await load(context.branch.id); announce('Nova revisão salva.');
+      }), 'primary'));
+    }
+
     if (mode === 'embedded') stage.append(button('Propor edição', () => run(async () => {
-      const changes = {}; if (text.value !== context.revision.fields.text) changes.text = text.value;
-      grid.querySelectorAll('[data-dimension]').forEach(input => { if (input.value !== context.revision.fields[input.dataset.dimension]) changes[input.dataset.dimension] = input.value; });
+      const changes = collectChanges();
       if (!Object.keys(changes).length) return announce('Nenhuma alteração para propor.');
       const proposed = await mutate('arena.submit_proposal', { branch_id: context.branch.id, expected_revision: context.branch.current_revision_id, base_revision_id: context.revision.id, changes, rationale: 'Edição sugerida no visualizador do artefato.', source_ids: [] });
-      await onContext?.({ branch_id: context.branch.id, revision_id: context.revision.id, proposal_id: proposed.proposal_id, action: 'proposed_edit' });
-      await load(context.branch.id); announce('Edição enviada como proposta pendente.');
+      const warning = await onContext?.({ branch_id: context.branch.id, revision_id: context.revision.id, proposal_id: proposed.proposal_id, action: 'proposed_edit' });
+      await load(context.branch.id); announce(`Edição enviada como proposta pendente.${warning ? ` ${warning}` : ''}`);
     }), 'primary'));
 
     const panel = el('aside', { class: 'panel', 'aria-label': 'Propostas para revisão' }, el('h2', { text: 'Propostas' }));

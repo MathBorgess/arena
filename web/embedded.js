@@ -16,9 +16,14 @@ const viewer = mountArena({
     return JSON.parse(text.text);
   },
   async onContext(context) {
-    if (!app.getHostCapabilities()?.updateModelContext?.text) { viewer.announce('Ação persistida. O agente pode reler os eventos pelo MCP; este host não oferece atualização de contexto.'); return; }
+    if (!app.getHostCapabilities()?.updateModelContext?.text) return 'Este host não oferece atualização de contexto; o agente pode reler os eventos pelo MCP.';
     try { await app.updateModelContext({ structuredContent: context, content: [{ type: 'text', text: `Arena: ${JSON.stringify(context)}. Contexto do artefato, sem aceite humano.` }] }); }
-    catch { viewer.announce('Ação persistida; o host recusou a atualização de contexto. O agente pode reler os eventos pelo MCP.', true); }
+    catch { return 'O host recusou a atualização de contexto; o agente pode reler os eventos pelo MCP.'; }
+  },
+  async requestReview(context) {
+    if (!app.getHostCapabilities()?.message?.text) return 'Pedido persistido. Este host não permite solicitar outra resposta; peça a revisão na conversa.';
+    try { await app.sendMessage({ role: 'user', content: [{ type: 'text', text: `Revise o trecho registrado na Arena. Releia a revisão atual e os eventos antes de propor: ${JSON.stringify(context)}` }] }); }
+    catch { return 'Pedido persistido. O host recusou a mensagem; peça a revisão na conversa.'; }
   },
   async openHuman() {
     const url = presentation?.viewer_url;

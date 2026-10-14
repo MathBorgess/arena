@@ -54,3 +54,32 @@ test('MCP Apps SDK host displays exact artifact and persists an edit as an agent
     await expect(host.frame.getByRole('button', { name: 'Abrir revisão humana' }).first()).toBeVisible();
   } finally { await viewer.close(); arena.close(); }
 });
+
+test('embedded passage actions preserve agent authorship and request another turn only on explicit review', async ({ page }) => {
+  const arena = new Arena(':memory:');
+  const credentials = arena.bootstrap({ workspace_name: 'Oficina fictícia', owner_name: 'Autora exemplo' });
+  const scope = { workspace_id: credentials.workspace_id };
+  const created = arena.execute('arena.create_exploration', credentials.agent, { ...scope, title: 'Um trecho embutido', objective: 'Registrar referência', idempotency_key: 'create' });
+  arena.execute('human.edit_branch', credentials.owner, { ...scope, branch_id: created.branch_id, expected_revision: created.revision_id, changes: { text: 'Uma ideia abre uma conversa.' }, source_ids: [], reason: 'Texto fictício', idempotency_key: 'edit' });
+  const context = arena.execute('arena.read_context', credentials.agent, { ...scope, branch_id: created.branch_id });
+  const viewer = await startHttpServer({ arena, workspace_id: credentials.workspace_id, port: 0 });
+  try {
+    const host = await referenceHost(page, viewer.url, context, arena, credentials);
+    const text = host.frame.getByLabel('Texto do artefato');
+    await text.evaluate((node: HTMLTextAreaElement) => { node.focus(); node.setSelectionRange(4, 9); node.dispatchEvent(new Event('select', { bubbles: true })); });
+    expect(host.messages).toHaveLength(0); expect(host.updates).toHaveLength(0);
+    await host.frame.getByLabel('Comentário sobre o trecho').fill('Rever a escolha da palavra.');
+    await host.frame.getByRole('button', { name: 'Registrar comentário' }).click();
+    await expect.poll(() => host.updates.length).toBe(1);
+    expect(host.updates[0].structuredContent.author).toEqual(credentials.agent);
+    expect(host.updates[0].structuredContent.ui_origin).toBe('unverified');
+    expect(host.updates[0].structuredContent.selection).toEqual({ start: 4, end: 9, text: 'ideia' });
+    expect(host.messages).toHaveLength(0);
+    await host.frame.getByRole('button', { name: 'Revisar trecho' }).click();
+    await expect.poll(() => host.messages.length).toBe(1);
+    expect(host.messages[0].role).toBe('user');
+    const events = arena.execute('arena.read_events', credentials.agent, { ...scope, branch_id: created.branch_id }).events;
+    expect(events.find((event: any) => event.type === 'request_revision').author).toEqual(credentials.agent);
+    expect(arena.execute('arena.read_context', credentials.agent, { ...scope, branch_id: created.branch_id }).revision.id).toBe(context.revision.id);
+  } finally { await viewer.close(); arena.close(); }
+});
