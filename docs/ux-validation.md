@@ -78,7 +78,7 @@ A cadeia **seleção → persistência → contexto → revisão** já foi obser
 - O carregador instalado de Impeccable não oferece o subcomando `context` descrito na skill. Não há `PRODUCT.md`/`DESIGN.md` neste checkout; o contrato e ADR 0003 guiam a avaliação. Nenhuma alteração visual foi feita como consequência dessa limitação.
 - A instalação MCP tornou as ferramentas disponíveis nesta sessão; não é necessário abrir outra conversa para começar.
 - Próxima tarefa humana: autenticar o visualizador local e confirmar que o texto aparece. A credencial é manipulada somente pelo proprietário no Terminal/formulário, fora do chat. Leitura, seleção e decisão serão conduzidas uma por vez nos turnos seguintes.
-- Registro ainda local e não commitado enquanto o percurso humano está em andamento. Nenhum merge, deploy, publicação social ou conexão a dados reais.
+- Na preparação, o registro ficou local enquanto o percurso humano começava. Ao fechar a rodada técnica, foi commitado e incluído no PR draft #9, conforme atualização ao fim desta seção. Nenhum merge, deploy, publicação social ou conexão a dados reais.
 
 ### Instrução curta de retomada preparada (ainda não testada)
 
@@ -203,6 +203,8 @@ Instrução curta preparada para o proprietário enviar numa **nova conversa loc
 > arena:contexto — retome “Piloto fictício — a tarefa que sobrou”. O checkout é `arena-ux-pilot`; leia `docs/ux-validation.md`, sincronize a Arena e abra somente o bloco editável atual. Mostre brevemente o contexto e as nuances capturadas e espere eu editar uma frase. Não aceite nem publique nada.
 
 Esse passo também pode produzir evidência real de retomada sem transportar o histórico completo. Ainda não foi realizado pelo proprietário. O título histórico da exploração não substitui a pauta editorial atual, que é o post sobre experimentar a própria Arena.
+
+Entrega para revisão: [PR draft #9](https://github.com/MathBorgess/arena/pull/9), empilhado sobre a branch do PR #7, com código e este registro. Checkout limpo e branch publicada em `codex/arena-native-ux-validation`; nenhuma alteração foi enviada à branch de implementação original. O piloto humano continua pendente nas etapas indicadas.
 
 ## Primeiro pedido humano e proposta pendente
 
