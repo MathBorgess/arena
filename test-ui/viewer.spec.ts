@@ -29,6 +29,25 @@ test('typing directly in the notepad autosaves a pending patch and makes the man
   } finally { await viewer.close(); f.arena.close(); }
 });
 
+test('a selection made while saving is persisted against the saved text without selecting it again', async ({ page }) => {
+  const f = fixture(); const viewer = await startHttpServer({ arena: f.arena, workspace_id: f.credentials.workspace_id, port: 0 });
+  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; }); let writing = false;
+  try {
+    await login(page, `${viewer.url}/?branch_id=${f.created.branch_id}`, f.credentials.owner_token);
+    await page.route('**/api/call', async route => {
+      if (route.request().postDataJSON()?.operation === 'human.patch_artifact') { writing = true; await held; }
+      await route.continue();
+    });
+    const text = page.getByRole('textbox', { name: 'Texto da proposta' });
+    await text.fill('Uma briga abre outra conversa.'); await expect.poll(() => writing).toBe(true);
+    await text.dblclick({ position: { x: 65, y: 20 } });
+    expect(await text.evaluate((node: HTMLTextAreaElement) => node.value.slice(node.selectionStart, node.selectionEnd))).toBe('briga');
+    release();
+    await expect.poll(() => f.arena.execute('arena.sync_context', f.credentials.agent,
+      { ...f.scope, branch_id: f.created.branch_id }).state.selection?.text).toBe('briga');
+  } finally { release(); await viewer.close(); f.arena.close(); }
+});
+
 test('a delayed save and a remote refresh preserve ongoing typing; a competing edit remains visible for recovery', async ({ page }) => {
   const f = fixture(); const viewer = await startHttpServer({ arena: f.arena, workspace_id: f.credentials.workspace_id, port: 0 });
   let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; }); let writing = false;

@@ -357,7 +357,8 @@ export class Arena implements ArenaService {
       ...(this.artifactProposal(workspace, branch, {})?.source_ids ?? [])])];
     const render = (value: unknown) => Array.isArray(value) ? value.join('\n') : value || 'Ainda não definido.';
     const text = stored?.text ?? [
-      '# DNA desta produção (rascunho)', `## Intenção\n${exploration.objective}`,
+      '# DNA desta produção (rascunho)', `## Intenção inicial\n${exploration.objective}`,
+      '## Direção atual\nAinda não consolidada neste DNA. As instruções mais recentes do autor na conversa têm precedência.',
       `## Identidade e voz\n${render(profile?.content.identity)}\n${render(profile?.content.tone)}`,
       `## Público\n${render(revision.fields.audience)}`, `## Tese e ângulo\n${render(revision.fields.thesis)}\n${render(revision.fields.angle)}`,
       `## Estrutura\n${render(revision.fields.structure)}`, `## Vocabulário\n${render(profile?.content.vocabulary)}`,
@@ -437,16 +438,27 @@ export class Arena implements ArenaService {
       let token: any;
       try { token = JSON.parse(Buffer.from(input.sync_cursor, 'base64url').toString('utf8')); }
       catch { return this.invalid('Checkpoint de sincronização inválido.'); }
-      const prior = this.get('snapshot', workspace, token?.id);
-      if (prior.actor_id !== actor.id || prior.scope !== scope) this.notFound();
-      previous = prior.payload;
+      let prior: Snapshot | undefined;
+      try { prior = this.get('snapshot', workspace, token?.id); }
+      catch (error) { if (!(error instanceof ArenaError) || error.code !== 'NOT_FOUND') throw error; }
+      if (prior) {
+        if (prior.actor_id !== actor.id || prior.scope !== scope) this.notFound();
+        previous = prior.payload;
+      }
+    }
+    if (previous && previous.restriction_stamp === restriction_stamp && previous.event_count === events.length &&
+      this.canonical(previous.state) === this.canonical(state)) {
+      return { mode: 'delta', artifact: null, dna: null, selection, selection_surface: latest?.surface ?? 'text', events: [], sync_cursor: input.sync_cursor };
     }
     const snapshot: Snapshot = { id: randomUUID(), workspace_id: workspace, actor_id: actor.id, scope,
       payload: { state, restriction_stamp, event_count: events.length }, created_at: this.now() };
     this.insert('snapshot', snapshot);
+    this.db.prepare(`DELETE FROM records WHERE id IN (SELECT id FROM records WHERE workspace_id = ? AND type = 'snapshot'
+      AND json_extract(data, '$.actor_id') = ? AND json_extract(data, '$.scope') = ? ORDER BY rowid DESC LIMIT -1 OFFSET 64)`)
+      .run(workspace, actor.id, scope);
     const sync_cursor = Buffer.from(JSON.stringify({ id: snapshot.id })).toString('base64url');
     if (!previous || previous.restriction_stamp !== restriction_stamp) {
-      return { mode: 'full', reset: !!previous, state, events: events.slice(-20).map(this.contextEvent), sync_cursor };
+      return { mode: 'full', reset: input.sync_cursor !== undefined, state, events: events.slice(-20).map(this.contextEvent), sync_cursor };
     }
     const before = (previous.state as Data).artifact;
     const changed = this.canonical(before) !== this.canonical(artifact);
@@ -470,12 +482,26 @@ export class Arena implements ArenaService {
 
   private patchArtifact(operation: string, workspace: string, actor: Actor, input: Data): Data {
     const branch = this.get('branch', workspace, input.branch_id);
-    this.expectHead(branch, input.expected_revision);
+    const original = this.db.prepare("SELECT type, data FROM records WHERE id = ? AND workspace_id = ? AND type IN ('proposal','revision','production_dna')")
+      .get(input.artifact_id, workspace);
+    let shareLocal = false;
+    if (original) {
+      const data = JSON.parse(String(original.data));
+      if (data.branch_id === branch.id) {
+        this.validateSourceIds(workspace, original.type === 'revision' ? this.revisionSources(data) : data.source_ids);
+        shareLocal = true;
+      }
+    }
+    try { this.expectHead(branch, input.expected_revision); }
+    catch (error) {
+      if (error instanceof ArenaError && error.code === 'REVISION_CONFLICT') error.references.can_share_local_draft = shareLocal;
+      throw error;
+    }
     const current = this.openArtifact(workspace, { branch_id: branch.id, surface: input.surface }).artifact;
     const artifact_id = current.dna_id ?? current.proposal_id ?? current.revision_id;
     if (input.artifact_id !== artifact_id || input.presented_version !== (current.dna_version ?? current.presented_version ?? 0)) {
       throw new ArenaError('REVISION_CONFLICT', 'O bloco mudou enquanto você escrevia. Seu texto foi preservado localmente.',
-        { branch_id: branch.id, artifact_id, presented_version: current.presented_version ?? 0 });
+        { branch_id: branch.id, artifact_id, presented_version: current.presented_version ?? 0, can_share_local_draft: shareLocal });
     }
     this.validateSourceIds(workspace, current.source_ids);
     if (current.redacted) throw new ArenaError('SOURCE_UNAVAILABLE', 'O bloco usa uma fonte indisponível.');
@@ -492,8 +518,10 @@ export class Arena implements ArenaService {
       this.insert('production_dna', saved);
       artifact = { ...current, dna_id: saved.id, dna_version: saved.version };
     } else {
+      const dependencies = current.proposal_id ? this.get('proposal', workspace, current.proposal_id).dependencies.text
+        : this.get('revision', workspace, current.revision_id).artifacts.text?.dependencies;
       const saved = this.submitProposal(workspace, actor, { branch_id: branch.id, expected_revision: branch.current_revision_id,
-        base_revision_id: branch.current_revision_id, changes: { text }, dependencies: { text: [] },
+        base_revision_id: branch.current_revision_id, changes: { text }, dependencies: Array.isArray(dependencies) ? { text: dependencies } : {},
         source_ids: current.source_ids, rationale: input.rationale === undefined ? 'Alteração incremental no bloco de texto.' : this.requireText(input.rationale, 'rationale') });
       const proposal = this.get('proposal', workspace, saved.proposal_id);
       proposal.origin_proposal_id = current.proposal_id ?? null;
@@ -624,8 +652,10 @@ export class Arena implements ArenaService {
       this.validateSourceIds(workspace, [...draft.source_ids, ...dna.source_ids]);
       if (draft.redacted || dna.redacted) throw new ArenaError('SOURCE_UNAVAILABLE', 'A produção contém referências indisponíveis.');
       if (draft.proposal_id) {
+        const dependencies = this.get('proposal', workspace, draft.proposal_id).dependencies.text;
         const proposed = this.submitProposal(workspace, actor, { branch_id, expected_revision: revision_id, base_revision_id: revision_id,
-          changes: { text: draft.text }, dependencies: { text: [] }, source_ids: draft.source_ids, rationale: 'Variação do rascunho atual, sem aceite implícito.' });
+          changes: { text: draft.text }, dependencies: Array.isArray(dependencies) ? { text: dependencies } : {},
+          source_ids: draft.source_ids, rationale: 'Variação do rascunho atual, sem aceite implícito.' });
         const proposal = this.get('proposal', workspace, proposed.proposal_id);
         proposal.origin_proposal_id = draft.proposal_id; this.update('proposal', proposal);
       }

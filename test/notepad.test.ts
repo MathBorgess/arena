@@ -51,6 +51,27 @@ test('accepting the current notepad keeps the approved text visible instead of r
   } finally { f.arena.close(); }
 });
 
+test('manual editing preserves the text dependency on its audience after approval', () => {
+  const f = fixture();
+  try {
+    const scope = { ...f.scope, branch_id: f.created.branch_id };
+    const base = f.arena.execute('human.edit_branch', f.credentials.owner, { ...scope, expected_revision: f.created.revision_id,
+      changes: { audience: 'Iniciantes', text: 'Um texto para iniciantes.' }, dependencies: { audience: [], text: ['audience'] },
+      source_ids: [], reason: 'Base fictícia', idempotency_key: 'dependent-base' });
+    const saved = f.arena.execute('arena.patch_artifact', f.credentials.agent, { ...scope,
+      expected_revision: base.revision_id, artifact_id: base.revision_id, presented_version: 0,
+      patch: { start: 0, end: 2, text: 'Outro' }, idempotency_key: 'dependent-edit' });
+    const accepted = f.arena.execute('human.decide_proposal', f.credentials.owner, { ...f.scope, proposal_id: saved.artifact.proposal_id,
+      presented_version: 1, expected_revision: base.revision_id, expected_head_revision: base.revision_id,
+      decision: 'accepted', idempotency_key: 'dependent-approval' });
+    f.arena.execute('human.edit_branch', f.credentials.owner, { ...scope, expected_revision: accepted.revision_id,
+      changes: { audience: 'Especialistas' }, dependencies: { audience: [] }, source_ids: [], reason: 'Outra entrada', idempotency_key: 'audience' });
+    const current = f.arena.execute('arena.read_context', f.credentials.agent, scope);
+    assert.equal(current.revision.artifacts.text.needs_review, true);
+    assert.deepEqual(current.revision.artifacts.text.dependencies, ['audience']);
+  } finally { f.arena.close(); }
+});
+
 test('one context sync preloads the current work and later returns only new patches and interaction context', () => {
   const f = fixture();
   try {
@@ -60,6 +81,7 @@ test('one context sync preloads the current work and later returns only new patc
     assert.equal(first.state.artifact.text, 'Uma ideia abre uma conversa.');
     const unchanged = f.arena.execute('arena.sync_context', f.credentials.agent, { ...input, sync_cursor: first.sync_cursor });
     assert.equal(unchanged.mode, 'delta');
+    assert.equal(unchanged.sync_cursor, first.sync_cursor, 'unchanged polling reuses the existing checkpoint');
     assert.equal(unchanged.artifact, null);
     assert.equal(unchanged.context, undefined);
     assert.deepEqual(unchanged.events, []);
@@ -80,6 +102,25 @@ test('one context sync preloads the current work and later returns only new patc
     assert.equal(delta.selection, null);
     assert.throws(() => f.arena.execute('arena.sync_context', f.credentials.owner,
       { ...input, sync_cursor: first.sync_cursor }), { code: 'NOT_FOUND' });
+  } finally { f.arena.close(); }
+});
+
+test('expired sync checkpoints recover through a fresh sanitized preload instead of losing the work', () => {
+  const f = fixture();
+  try {
+    const scope = { ...f.scope, branch_id: f.created.branch_id };
+    const first = f.arena.execute('arena.sync_context', f.credentials.agent, scope);
+    let cursor = first.sync_cursor;
+    for (let i = 0; i < 65; i++) {
+      f.arena.execute('arena.add_feedback', f.credentials.agent, { ...scope, target_id: f.created.branch_id,
+        revision_id: f.created.revision_id, expected_revision: f.created.revision_id,
+        type: 'comment', text: `Nuance fictícia ${i}`, idempotency_key: `nuance-${i}` });
+      cursor = f.arena.execute('arena.sync_context', f.credentials.agent, { ...scope, sync_cursor: cursor }).sync_cursor;
+    }
+    const resumed = f.arena.execute('arena.sync_context', f.credentials.agent, { ...scope, sync_cursor: first.sync_cursor });
+    assert.equal(resumed.mode, 'full'); assert.equal(resumed.reset, true);
+    assert.equal(resumed.state.artifact.text, 'Uma ideia abre uma conversa.');
+    assert.equal(resumed.state.context.feedback.at(-1).text, 'Nuance fictícia 64');
   } finally { f.arena.close(); }
 });
 

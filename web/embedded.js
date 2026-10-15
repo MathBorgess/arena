@@ -9,7 +9,7 @@ const viewer = mountArena({
   async call(operation, input) {
     if (!app.getHostCapabilities()?.serverTools) throw new Error('O host não permite registrar a seleção do artefato.');
     const result = await app.callServerTool({ name: operation, arguments: { ...input, workspace_id: workspaceId } });
-    if (result.isError) { const failure = result.structuredContent?.error; const error = new Error(failure?.message ?? 'Artefato indisponível.'); error.code = failure?.code; throw error; }
+    if (result.isError) { const failure = result.structuredContent?.error; const error = new Error(failure?.message ?? 'Artefato indisponível.'); error.code = failure?.code; error.references = failure?.references; throw error; }
     if (result.structuredContent) return result.structuredContent;
     const text = result.content?.find(item => item.type === 'text'); if (!text) throw new Error('Texto do artefato indisponível.'); return JSON.parse(text.text);
   },

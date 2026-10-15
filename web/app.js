@@ -108,10 +108,16 @@ export function mountArena({ call, onContext, mode = 'local', root = document.ge
       if (!current || identity(current.artifact) !== identity(artifact)) return;
       if (['ACCESS_DENIED', 'NOT_FOUND', 'SOURCE_UNAVAILABLE'].includes(error.code)) { clear(); announce(error.message); return; }
       conflicted = true;
+      if (error.code === 'REVISION_CONFLICT' && error.references?.can_share_local_draft) {
+        await contextSnapshot({ ...reference(artifact), action: 'edit_conflict', persisted: false, selection: null,
+          local_draft: text.value, draft_patch: difference(artifact.text, text.value), source_ids: artifact.source_ids,
+          ui_origin: 'unverified', remote_artifact_id: error.references.artifact_id });
+      }
       announce(`${error.message ?? 'Não foi possível salvar.'} Seu texto continua no bloco. Peça arena:contexto na conversa para comparar.`);
     } finally {
       saving = false;
       if (dirty && !conflicted && current) saveTimer = setTimeout(() => { void save(); }, 120);
+      else if (!dirty && !conflicted && current) selectionChanged();
     }
   }
   text.addEventListener('input', () => {
@@ -180,7 +186,7 @@ export function mountArena({ call, onContext, mode = 'local', root = document.ge
 if (document.body.dataset.channel === 'local') {
   async function call(operation, input) {
     const response = await fetch('/api/call', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operation, input }) });
-    const result = await response.json(); if (!response.ok) { const error = new Error(result.message); error.code = result.code; throw error; } return result;
+    const result = await response.json(); if (!response.ok) { const error = new Error(result.message); error.code = result.code; error.references = result.references; throw error; } return result;
   }
   async function ready() {
     const viewer = mountArena({ call }); const query = new URL(location.href).searchParams;
