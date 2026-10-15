@@ -11,7 +11,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 interface LocalConfig { format_version: 1; workspace_id: string; database_path: string; membership_revision: number }
 const conversationalOperations = new Set([
   'arena.list_work', 'arena.read_context', 'arena.read_source', 'arena.compare_branches', 'arena.list_profiles',
-  'arena.open_artifact', 'arena.read_events', 'arena.export_context', 'arena.get_operation',
+  'arena.open_artifact', 'arena.read_events', 'arena.sync_context', 'arena.export_context', 'arena.get_operation',
   'human.list_sources', 'human.integration_status', 'human.decide_proposal', 'human.edit_branch', 'human.set_locks',
   'human.create_profile', 'human.approve_profile', 'human.import_sources', 'human.revoke_source', 'human.remove_source',
   'human.review_artifacts', 'human.export_text', 'human.record_artifact_interaction'

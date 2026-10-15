@@ -15,7 +15,7 @@ const viewer = mountArena({
   },
   async onContext(context) {
     if (!app.getHostCapabilities()?.updateModelContext?.text) return;
-    await app.updateModelContext({ structuredContent: context, content: [{ type: 'text', text: `Seleção de referência da Arena: ${JSON.stringify(context)}. A seleção não solicita outra resposta nem concede aceite humano.` }] });
+    await app.updateModelContext({ structuredContent: context, content: [{ type: 'text', text: `Contexto incremental da Arena: ${JSON.stringify(context)}. Escrita e seleção são contexto, não iniciam resposta nem concedem aceite. Reutilize a base e aplique somente os patches novos.` }] });
   }
 });
 app.ontoolinput = params => { toolInput = params.arguments; };

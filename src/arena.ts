@@ -99,6 +99,7 @@ export class Arena implements ArenaService {
       case 'arena.open_artifact': return this.paginate('read_context', persisted, workspace, input,
         this.openArtifact(workspace, input), ['proposals', 'decisions', 'feedback', 'events', 'sources', 'sessions']);
       case 'arena.read_events': return this.paginate('read_events', persisted, workspace, input, this.readEvents(workspace, persisted, input), ['events']);
+      case 'arena.sync_context': return this.transaction(() => this.syncContext(workspace, persisted, input));
       case 'arena.compare_branches': return this.compareBranches(workspace, input);
       case 'arena.list_profiles': return this.listProfiles(workspace);
       case 'arena.read_source': return this.readSource(workspace, input);
@@ -136,6 +137,9 @@ export class Arena implements ArenaService {
       case 'arena.record_interaction':
       case 'human.record_artifact_interaction': return this.mutate(operation, persisted, workspace, input,
         () => this.recordInteraction(operation, workspace, persisted, input));
+      case 'arena.patch_artifact':
+      case 'human.patch_artifact': return this.mutate(operation, persisted, workspace, input,
+        () => this.patchArtifact(operation, workspace, persisted, input));
       default: throw new ArenaError('INVALID_INPUT', 'Operação desconhecida ou ainda indisponível.');
     }
   }
@@ -154,7 +158,7 @@ export class Arena implements ArenaService {
     if (['human.invite_member', 'human.revoke_member', 'human.record_verification'].includes(operation) && member.role !== 'owner') {
       throw new ArenaError('ACCESS_DENIED', 'Esta ação exige o proprietário do workspace.');
     }
-    const reviewerAllowed = new Set(['arena.list_work', 'arena.read_context', 'arena.open_artifact', 'arena.read_events',
+    const reviewerAllowed = new Set(['arena.list_work', 'arena.read_context', 'arena.open_artifact', 'arena.read_events', 'arena.sync_context',
       'arena.read_source', 'arena.compare_branches', 'arena.export_context', 'arena.list_profiles', 'arena.get_operation',
       'arena.add_feedback', 'arena.record_interaction', 'human.record_artifact_interaction', 'human.decide_proposal',
       'human.approve_profile', 'human.review_artifacts', 'human.export_text', 'human.list_sources', 'human.integration_status']);
@@ -289,7 +293,8 @@ export class Arena implements ArenaService {
     const decisions = this.list('decision', workspace).filter(decision => decision.branch_id === branch.id);
     const feedback = this.list('feedback', workspace).filter(item => item.branch_id === branch.id);
     const profile = revision.profile_revision_id ? this.get('profile_revision', workspace, revision.profile_revision_id) : null;
-    const source_ids = new Set([...this.revisionSources(revision), ...proposals.flatMap(proposal => proposal.source_ids), ...(profile?.source_ids ?? [])]);
+    const dna = this.productionDna(workspace, branch);
+    const source_ids = new Set([...this.revisionSources(revision), ...proposals.flatMap(proposal => proposal.source_ids), ...(profile?.source_ids ?? []), ...dna.source_ids]);
     return { format_version: 1, workspace_id: workspace,
       exploration: { id: exploration.id, title: exploration.title, objective: exploration.objective },
       branch: { id: branch.id, name: branch.name, origin_branch_id: branch.origin_branch_id,
@@ -297,7 +302,7 @@ export class Arena implements ArenaService {
         profile_revision_id: branch.profile_revision_id },
       revision: { id: revision.id, fields: revision.fields, locks: revision.locks, artifacts: revision.artifacts,
         profile_revision_id: revision.profile_revision_id },
-      profile, proposals, decisions, feedback,
+      profile, dna, proposals, decisions, feedback,
       sources: this.list('source', workspace).filter(source => source_ids.has(source.id)).map(source => this.sourceMetadata(source)),
       events: this.list('event', workspace).filter(event => event.branch_id === branch.id),
       sessions: this.list('session', workspace).filter(session => session.branch_id === branch.id),
@@ -312,7 +317,7 @@ export class Arena implements ArenaService {
     const proposal = input.proposal_id !== undefined
       ? this.get('proposal', workspace, input.proposal_id)
       : (input.revision_id !== undefined ? [] : this.list('proposal', workspace)).filter(item => item.branch_id === branch.id && item.status === 'pending' &&
-          Object.hasOwn(item.changes, 'text') && (input.revision_id === undefined || item.base_revision_id === input.revision_id)).at(-1);
+          Object.hasOwn(item.changes, 'text') && item.base_revision_id === branch.current_revision_id).at(-1);
     if (!proposal) return undefined;
     if (proposal.branch_id !== branch.id) this.notFound();
     if (proposal.status !== 'pending' || !Object.hasOwn(proposal.changes, 'text') ||
@@ -326,6 +331,9 @@ export class Arena implements ArenaService {
 
   private openArtifact(workspace: string, input: Data): Data {
     const branch = this.get('branch', workspace, input.branch_id);
+    if (input.surface !== undefined && !['text', 'dna'].includes(input.surface)) this.invalid('Bloco inválido.');
+    if (input.surface === 'dna') return { ...this.readContext(workspace, input), artifact: this.productionDna(workspace, branch),
+      presentation: { follow_current: true } };
     const proposal = this.artifactProposal(workspace, branch, input);
     const revision = this.get('revision', workspace, proposal?.base_revision_id ?? input.revision_id ?? branch.current_revision_id);
     if (revision.branch_id !== branch.id) this.notFound();
@@ -338,6 +346,28 @@ export class Arena implements ArenaService {
       ...(safe.redacted || safe.artifacts?.text?.redacted ? { redacted: true } : {})
     }, presentation: { resource_uri: 'ui://arena/artifact/v1.html', format: 'mcp-apps', requires_host_support: true,
       fallback: 'local_authenticated_viewer', human_actions_require_authentication: true, follow_current: input.revision_id === undefined && input.proposal_id === undefined } };
+  }
+
+  private productionDna(workspace: string, branch: Branch): Data {
+    const revision = this.get('revision', workspace, branch.current_revision_id);
+    const stored = this.list('production_dna', workspace).filter(d => d.branch_id === branch.id).at(-1);
+    const exploration = this.get('exploration', workspace, branch.exploration_id);
+    const profile = revision.profile_revision_id ? this.get('profile_revision', workspace, revision.profile_revision_id) : null;
+    const source_ids = stored?.source_ids ?? [...new Set([...this.revisionSources(revision),
+      ...(this.artifactProposal(workspace, branch, {})?.source_ids ?? [])])];
+    const render = (value: unknown) => Array.isArray(value) ? value.join('\n') : value || 'Ainda não definido.';
+    const text = stored?.text ?? [
+      '# DNA desta produção (rascunho)', `## Intenção\n${exploration.objective}`,
+      `## Identidade e voz\n${render(profile?.content.identity)}\n${render(profile?.content.tone)}`,
+      `## Público\n${render(revision.fields.audience)}`, `## Tese e ângulo\n${render(revision.fields.thesis)}\n${render(revision.fields.angle)}`,
+      `## Estrutura\n${render(revision.fields.structure)}`, `## Vocabulário\n${render(profile?.content.vocabulary)}`,
+      `## Regras e limites\n${render(profile?.content.rules)}`, '## Repertório e referências\nAinda não definido.',
+      '## Nuances confirmadas pelo autor\nAinda não definido.', '## Hipóteses do agente\nAinda não definido.'
+    ].join('\n\n');
+    const safe = this.sanitize({ text, source_ids }, workspace);
+    return { surface: 'dna', kind: 'dna', branch_id: branch.id, revision_id: revision.id, current_revision_id: revision.id,
+      dna_id: stored?.id ?? `dna:${branch.id}:${revision.id}`, dna_version: stored?.version ?? 0,
+      ...safe };
   }
 
   private submitProposal(workspace: string, actor: Actor, input: Data): Data {
@@ -376,6 +406,112 @@ export class Arena implements ArenaService {
     this.insert('proposal', proposal);
     return { proposal_id: proposal.id, version: proposal.version, status: proposal.status,
       ...(proposal.session_id ? { session_id: proposal.session_id } : {}) };
+  }
+
+  private textPatch(before: string, after: string): Data {
+    let start = 0, end = before.length, nextEnd = after.length;
+    while (start < end && start < nextEnd && before[start] === after[start]) start++;
+    while (end > start && nextEnd > start && before[end - 1] === after[nextEnd - 1]) { end--; nextEnd--; }
+    return { start, end, text: after.slice(start, nextEnd) };
+  }
+
+  private syncContext(workspace: string, actor: Actor, input: Data): Data {
+    const opened = this.sanitize(this.openArtifact(workspace, { branch_id: input.branch_id }), workspace);
+    const events = opened.events;
+    const artifact = opened.artifact;
+    const dna = opened.dna;
+    const latest = [...events].reverse().find((event: Data) => ['selection', 'selection_clear', 'text_edit', 'dna_edit'].includes(event.type));
+    const selectedArtifact = latest?.surface === 'dna' ? dna : artifact;
+    const selection = latest?.type === 'selection' && !latest.redacted && latest.revision_id === selectedArtifact.revision_id &&
+      (latest.dna_id ?? latest.proposal_id ?? latest.revision_id) === (selectedArtifact.dna_id ?? selectedArtifact.proposal_id ?? selectedArtifact.revision_id) &&
+      latest.selection && selectedArtifact.text.slice(latest.selection.start, latest.selection.end) === latest.selection.text ? latest.selection : null;
+    const context = { workspace_id: workspace, exploration: opened.exploration, branch: opened.branch,
+      revision: opened.revision, profile: opened.profile, sources: opened.sources,
+      feedback: opened.feedback.slice(-20), decisions: opened.decisions.slice(-20),
+      proposals: opened.proposals.slice(-20).map((p: Data) => ({ id: p.id, version: p.version, status: p.status, base_revision_id: p.base_revision_id })) };
+    const restriction_stamp = this.hash(this.canonical(this.list('source', workspace).map(s => [s.id, s.revision, s.status, s.rights, s.usage_scope])));
+    const state: Data = { context, artifact, dna, selection, selection_surface: latest?.surface ?? 'text' };
+    let previous: Data | undefined;
+    const scope = `sync:${input.branch_id}`;
+    if (input.sync_cursor !== undefined) {
+      let token: any;
+      try { token = JSON.parse(Buffer.from(input.sync_cursor, 'base64url').toString('utf8')); }
+      catch { return this.invalid('Checkpoint de sincronização inválido.'); }
+      const prior = this.get('snapshot', workspace, token?.id);
+      if (prior.actor_id !== actor.id || prior.scope !== scope) this.notFound();
+      previous = prior.payload;
+    }
+    const snapshot: Snapshot = { id: randomUUID(), workspace_id: workspace, actor_id: actor.id, scope,
+      payload: { state, restriction_stamp, event_count: events.length }, created_at: this.now() };
+    this.insert('snapshot', snapshot);
+    const sync_cursor = Buffer.from(JSON.stringify({ id: snapshot.id })).toString('base64url');
+    if (!previous || previous.restriction_stamp !== restriction_stamp) {
+      return { mode: 'full', reset: !!previous, state, events: events.slice(-20).map(this.contextEvent), sync_cursor };
+    }
+    const before = (previous.state as Data).artifact;
+    const changed = this.canonical(before) !== this.canonical(artifact);
+    const { text: _text, ...after } = artifact;
+    const oldDna = (previous.state as Data).dna;
+    const { text: _dnaText, ...afterDna } = dna;
+    return { mode: 'delta', artifact: changed ? { before_artifact_id: before.proposal_id ?? before.revision_id,
+      after, patch: this.textPatch(before.text, artifact.text) } : null,
+      dna: this.canonical(oldDna) !== this.canonical(dna) ? { before_artifact_id: oldDna.dna_id, after: afterDna,
+        patch: this.textPatch(oldDna.text, dna.text) } : null,
+      ...(this.canonical((previous.state as Data).context) !== this.canonical(context) ? { context: Object.fromEntries(
+        Object.entries(context).filter(([key, value]) => this.canonical(((previous.state as Data).context as Data)[key]) !== this.canonical(value))) } : {}),
+      selection, selection_surface: latest?.surface ?? 'text', events: events.slice(previous.event_count as number).map(this.contextEvent), sync_cursor };
+  }
+
+  private contextEvent(event: Data): Data {
+    // Historical passages/patch bodies stay in the audit API, never become active context again.
+    const { selection: _selection, patch: _patch, ...metadata } = event;
+    return metadata;
+  }
+
+  private patchArtifact(operation: string, workspace: string, actor: Actor, input: Data): Data {
+    const branch = this.get('branch', workspace, input.branch_id);
+    this.expectHead(branch, input.expected_revision);
+    const current = this.openArtifact(workspace, { branch_id: branch.id, surface: input.surface }).artifact;
+    const artifact_id = current.dna_id ?? current.proposal_id ?? current.revision_id;
+    if (input.artifact_id !== artifact_id || input.presented_version !== (current.dna_version ?? current.presented_version ?? 0)) {
+      throw new ArenaError('REVISION_CONFLICT', 'O bloco mudou enquanto você escrevia. Seu texto foi preservado localmente.',
+        { branch_id: branch.id, artifact_id, presented_version: current.presented_version ?? 0 });
+    }
+    this.validateSourceIds(workspace, current.source_ids);
+    if (current.redacted) throw new ArenaError('SOURCE_UNAVAILABLE', 'O bloco usa uma fonte indisponível.');
+    const patch = input.patch;
+    if (!patch || !Number.isSafeInteger(patch.start) || !Number.isSafeInteger(patch.end) || patch.start < 0 ||
+      patch.end < patch.start || patch.end > current.text.length || typeof patch.text !== 'string') this.invalid('Alteração de texto inválida.');
+    const text = current.text.slice(0, patch.start) + patch.text + current.text.slice(patch.end);
+    if (text.length > 50_000) this.invalid('O bloco aceita até 50000 caracteres.');
+    let artifact: Data;
+    if (current.surface === 'dna') {
+      const saved: RecordRegistry['production_dna'] = { id: randomUUID(), workspace_id: workspace, branch_id: branch.id,
+        version: current.dna_version + 1, text, previous_id: current.dna_version ? current.dna_id : null,
+        source_ids: current.source_ids, author: actor, created_at: this.now() };
+      this.insert('production_dna', saved);
+      artifact = { ...current, dna_id: saved.id, dna_version: saved.version };
+    } else {
+      const saved = this.submitProposal(workspace, actor, { branch_id: branch.id, expected_revision: branch.current_revision_id,
+        base_revision_id: branch.current_revision_id, changes: { text }, dependencies: { text: [] },
+        source_ids: current.source_ids, rationale: input.rationale === undefined ? 'Alteração incremental no bloco de texto.' : this.requireText(input.rationale, 'rationale') });
+      const proposal = this.get('proposal', workspace, saved.proposal_id);
+      proposal.origin_proposal_id = current.proposal_id ?? null;
+      this.update('proposal', proposal);
+      artifact = { ...current, kind: 'proposal', proposal_id: proposal.id, presented_version: proposal.version };
+    }
+    delete artifact.text;
+    const id = randomUUID();
+    const event = { id, event_id: id, workspace_id: workspace, artifact_id: branch.id, branch_id: branch.id,
+      revision_id: branch.current_revision_id, type: current.surface === 'dna' ? 'dna_edit' : 'text_edit', operation, dimension: 'text', selection: null,
+      ...(current.surface === 'dna' ? { surface: 'dna' as const, dna_id: artifact.dna_id, dna_version: artifact.dna_version }
+        : { proposal_id: artifact.proposal_id, presented_version: artifact.presented_version }), patch: { ...patch },
+      before_artifact_id: artifact_id, comment: input.rationale === undefined ? '' : this.requireText(input.rationale, 'rationale'),
+      source_ids: current.source_ids, author: actor, created_at: this.now(),
+      ui_origin: operation === 'human.patch_artifact' ? 'authenticated_human_channel' as const : 'unverified' as const };
+    this.insert('event', event);
+    return { artifact, patch: { ...patch }, before_artifact_id: artifact_id, event_id: id, event, status: 'pending',
+      sync: this.syncContext(workspace, actor, { branch_id: branch.id, sync_cursor: input.sync_cursor }) };
   }
 
   private addFeedback(workspace: string, actor: Actor, input: Data): Data {
@@ -467,6 +603,8 @@ export class Arena implements ArenaService {
     this.expectHead(source, input.expected_revision);
     const base = this.get('revision', workspace, input.source_revision_id);
     if (base.branch_id !== source.id) this.notFound();
+    if (input.include_current_draft !== undefined && typeof input.include_current_draft !== 'boolean') this.invalid('include_current_draft deve ser booleano.');
+    if (input.include_current_draft && base.id !== source.current_revision_id) this.conflict(source, base.id);
     this.validateSourceIds(workspace, this.revisionSources(base));
     const vary_dimensions = this.validateDimensions(input.vary_dimensions);
     const locks = this.validateLocks(input.locks ?? base.locks, base.fields);
@@ -480,6 +618,20 @@ export class Arena implements ArenaService {
       current_revision_id: revision_id, profile_revision_id: base.profile_revision_id, vary_dimensions });
     this.insert('revision', { ...base, id: revision_id, branch_id, parent_revision_id: base.id, locks,
       author: actor, created_at: this.now() });
+    if (input.include_current_draft) {
+      const draft = this.openArtifact(workspace, { branch_id: source.id }).artifact;
+      const dna = this.productionDna(workspace, source);
+      this.validateSourceIds(workspace, [...draft.source_ids, ...dna.source_ids]);
+      if (draft.redacted || dna.redacted) throw new ArenaError('SOURCE_UNAVAILABLE', 'A produção contém referências indisponíveis.');
+      if (draft.proposal_id) {
+        const proposed = this.submitProposal(workspace, actor, { branch_id, expected_revision: revision_id, base_revision_id: revision_id,
+          changes: { text: draft.text }, dependencies: { text: [] }, source_ids: draft.source_ids, rationale: 'Variação do rascunho atual, sem aceite implícito.' });
+        const proposal = this.get('proposal', workspace, proposed.proposal_id);
+        proposal.origin_proposal_id = draft.proposal_id; this.update('proposal', proposal);
+      }
+      this.insert('production_dna', { id: randomUUID(), workspace_id: workspace, branch_id, version: 1, text: dna.text,
+        previous_id: dna.dna_version ? dna.dna_id : null, source_ids: dna.source_ids, author: actor, created_at: this.now() });
+    }
     return { branch_id, revision_id };
   }
 
@@ -550,9 +702,13 @@ export class Arena implements ArenaService {
     const revision = this.get('revision', workspace, input.revision_id);
     if (revision.branch_id !== branch.id) this.notFound();
     if (revision.id !== branch.current_revision_id && !['selection', 'selection_clear'].includes(input.type)) this.conflict(branch, revision.id);
-    const proposal = input.proposal_id !== undefined || input.presented_version !== undefined ? this.artifactProposal(workspace, branch, input) : undefined;
+    const dna = input.surface === 'dna' ? this.productionDna(workspace, branch) : undefined;
+    if (dna && (input.dna_id !== dna.dna_id || input.dna_version !== dna.dna_version)) {
+      throw new ArenaError('REVISION_CONFLICT', 'O DNA mudou. Selecione o trecho da versão atual.');
+    }
+    const proposal = !dna && (input.proposal_id !== undefined || input.presented_version !== undefined) ? this.artifactProposal(workspace, branch, input) : undefined;
     if (proposal && (input.dimension !== 'text' || input.presented_version !== proposal.version)) this.invalid('Informe a versão exata da proposta de texto.');
-    const selectedContent = proposal ? proposal.changes.text : revision.fields[input.dimension];
+    const selectedContent = dna ? dna.text : proposal ? proposal.changes.text : revision.fields[input.dimension];
     if (!dimensions.includes(input.dimension)) this.invalid('Dimensão inválida.');
     if (!['selection', 'selection_clear', 'comment', 'request_revision'].includes(input.type)) this.invalid('Tipo de interação inválido.');
     let selection: PassageSelection | undefined;
@@ -568,15 +724,19 @@ export class Arena implements ArenaService {
     if (input.type === 'selection' && !selection) this.invalid('Uma seleção de texto é obrigatória.');
     if (input.comment !== undefined && typeof input.comment !== 'string') this.invalid('O comentário deve ser texto.');
     if (!['selection', 'selection_clear'].includes(input.type) && !selection && !input.comment?.trim()) this.invalid('Informe um comentário ou trecho para a interação.');
-    const source_ids = input.type === 'selection_clear' ? [] : proposal?.source_ids ?? revision.artifacts[input.dimension]?.source_ids ?? [];
+    const source_ids = input.type === 'selection_clear' ? [] : dna?.source_ids ?? proposal?.source_ids ?? revision.artifacts[input.dimension]?.source_ids ?? [];
     this.validateSourceIds(workspace, source_ids);
     const id = randomUUID();
-    this.insert('event', { id, event_id: id, workspace_id: workspace, artifact_id: branch.id, branch_id: branch.id,
+    const event: RecordRegistry['event'] = { id, event_id: id, workspace_id: workspace, artifact_id: branch.id, branch_id: branch.id,
       revision_id: revision.id, type: input.type, operation, dimension: input.dimension,
       ...(selection ? { selection } : input.type === 'selection_clear' ? { selection: null } : {}),
       ...(proposal ? { proposal_id: proposal.id, presented_version: proposal.version } : {}), comment: input.comment ?? '', source_ids,
-      author: actor, created_at: this.now(), ui_origin: operation === 'arena.record_interaction' ? 'unverified' : 'authenticated_human_channel' });
-    return { event_id: id, revision_id: revision.id };
+      ...(dna ? { surface: 'dna', dna_id: dna.dna_id, dna_version: dna.dna_version } : {}),
+      author: actor, created_at: this.now(), ui_origin: operation === 'arena.record_interaction' ? 'unverified' : 'authenticated_human_channel' };
+    this.insert('event', event);
+    return { event_id: id, revision_id: revision.id, event,
+      event_cursor: this.readEvents(workspace, actor, { branch_id: branch.id }).event_cursor,
+      sync: this.syncContext(workspace, actor, { branch_id: branch.id, sync_cursor: input.sync_cursor }) };
   }
 
   private importSources(workspace: string, actor: Actor, input: Data): Data {
@@ -662,7 +822,7 @@ export class Arena implements ArenaService {
     const terms = unavailable.map(source => source.content).filter(content => typeof content === 'string' && content.length > 0);
     const blank = (item: any): any => typeof item === 'string' ? '' : Array.isArray(item) ? [] : item && typeof item === 'object'
       ? Object.fromEntries(Object.entries(item).map(([key, entry]) => [key, blank(entry)])) : item;
-    const sensitive = new Set(['content', 'changes', 'rationale', 'comment', 'text', 'reason', 'selection', 'markdown', 'name', 'warnings',
+    const sensitive = new Set(['content', 'changes', 'patch', 'rationale', 'comment', 'text', 'reason', 'selection', 'markdown', 'name', 'warnings',
       'provider', 'client_name', 'client_version', 'external_session_id', 'date', 'origin', 'rights', 'usage_scope', 'coverage']);
     // These fields are assigned or validated by Arena. Declarations such as external_session_id,
     // provider and source dates are free text, even when their names resemble identifiers.
@@ -705,7 +865,9 @@ export class Arena implements ArenaService {
 
   private resultSources(workspace: string, input: Data, result: Data): string[] {
     let source_ids: string[] = [];
-    if (result.revision_id) source_ids = this.revisionSources(this.get('revision', workspace, result.revision_id));
+    if (result.artifact?.source_ids) source_ids.push(...result.artifact.source_ids);
+    if (result.event?.source_ids) source_ids.push(...result.event.source_ids);
+    if (result.revision_id) source_ids.push(...this.revisionSources(this.get('revision', workspace, result.revision_id)));
     if (result.profile_revision_id) source_ids.push(...this.get('profile_revision', workspace, result.profile_revision_id).source_ids);
     if (input.source_ids) source_ids.push(...input.source_ids);
     if (input.source_id) source_ids.push(input.source_id);
@@ -731,6 +893,7 @@ export class Arena implements ArenaService {
     context.rejections = context.decisions.filter((decision: Data) => decision.decision === 'rejected');
     const markdown = [`# ${context.exploration.title}`, context.exploration.objective,
       `Revisão: ${context.revision.id}`, ...dimensions.map(dimension => `## ${dimension}\n\n${context.revision.fields[dimension]}`),
+      `## DNA desta produção\n\n${context.dna.text}`,
       '## Decisões e proveniência', JSON.stringify({ decisions: context.decisions, sources: context.sources }, null, 2)].join('\n\n');
     return { package: context, markdown, checksum: this.hash(this.canonical(context)) };
   }

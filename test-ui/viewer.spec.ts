@@ -12,13 +12,70 @@ function fixture() {
 }
 async function login(page: any, url: string, token: string) { await page.goto(url); await page.getByLabel('Credencial humana').fill(token); await page.getByRole('button', { name: 'Entrar' }).click(); }
 
-test('viewer shows only readonly current proposal and automatically persists native cursor selection and clearing', async ({ page }) => {
+test('typing directly in the notepad autosaves a pending patch and makes the manual edit available to the agent', async ({ page }) => {
+  const f = fixture(); const viewer = await startHttpServer({ arena: f.arena, workspace_id: f.credentials.workspace_id, port: 0 });
+  try {
+    await login(page, `${viewer.url}/?branch_id=${f.created.branch_id}`, f.credentials.owner_token);
+    const text = page.getByRole('textbox', { name: 'Texto da proposta' });
+    await expect(text).toBeEditable();
+    await text.fill('Uma briga abre outra conversa.');
+    await text.press('Tab');
+    await expect.poll(() => f.arena.execute('arena.sync_context', f.credentials.agent,
+      { ...f.scope, branch_id: f.created.branch_id }).state.artifact.text).toBe('Uma briga abre outra conversa.');
+    const context = f.arena.execute('arena.read_context', f.credentials.agent, { ...f.scope, branch_id: f.created.branch_id });
+    expect(context.events.at(-1)).toMatchObject({ type: 'text_edit', author: f.credentials.owner, selection: null });
+    expect(context.revision.fields.text).toBe('Texto aceito anterior.'); expect(context.decisions).toEqual([]);
+    await page.waitForTimeout(1700); await expect(text).toHaveValue('Uma briga abre outra conversa.');
+  } finally { await viewer.close(); f.arena.close(); }
+});
+
+test('a delayed save and a remote refresh preserve ongoing typing; a competing edit remains visible for recovery', async ({ page }) => {
+  const f = fixture(); const viewer = await startHttpServer({ arena: f.arena, workspace_id: f.credentials.workspace_id, port: 0 });
+  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; }); let writing = false;
+  try {
+    await login(page, `${viewer.url}/?branch_id=${f.created.branch_id}`, f.credentials.owner_token);
+    await page.route('**/api/call', async route => {
+      if (route.request().postDataJSON()?.operation === 'human.patch_artifact' && !writing) { writing = true; await held; }
+      await route.continue();
+    });
+    const text = page.getByRole('textbox', { name: 'Texto da proposta' });
+    await text.fill('Meu rascunho começa aqui.'); await expect.poll(() => writing).toBe(true);
+    await text.fill('Meu rascunho continua enquanto salva.');
+    f.arena.execute('arena.submit_proposal', f.credentials.agent, { ...f.scope, branch_id: f.created.branch_id,
+      expected_revision: f.base.revision_id, base_revision_id: f.base.revision_id,
+      changes: { text: 'Alternativa concorrente.' }, source_ids: [], rationale: 'Conflito fictício', idempotency_key: 'competing' });
+    await page.waitForTimeout(1700); await expect(text).toHaveValue('Meu rascunho continua enquanto salva.');
+    release(); await expect(page.getByRole('status')).toContainText('Seu texto');
+    await page.waitForTimeout(1700); await expect(text).toHaveValue('Meu rascunho continua enquanto salva.');
+    expect(f.arena.execute('arena.open_artifact', f.credentials.agent, { ...f.scope, branch_id: f.created.branch_id }).artifact.text).toBe('Alternativa concorrente.');
+    expect(f.arena.execute('arena.read_context', f.credentials.agent, { ...f.scope, branch_id: f.created.branch_id }).decisions).toEqual([]);
+  } finally { release(); await viewer.close(); f.arena.close(); }
+});
+
+test('the same notepad edits production DNA and preserves keyboard selection as current context', async ({ page }) => {
+  const f = fixture(); const viewer = await startHttpServer({ arena: f.arena, workspace_id: f.credentials.workspace_id, port: 0 });
+  try {
+    await login(page, `${viewer.url}/?branch_id=${f.created.branch_id}&surface=dna`, f.credentials.owner_token);
+    const text = page.getByRole('textbox', { name: 'DNA da produção' }); await expect(text).toBeEditable();
+    await text.fill('Voz bruta. Público curioso.'); await text.press('Tab');
+    await expect.poll(() => f.arena.execute('arena.sync_context', f.credentials.agent,
+      { ...f.scope, branch_id: f.created.branch_id }).state.dna.text).toBe('Voz bruta. Público curioso.');
+    await expect(page.getByRole('status')).toBeHidden();
+    await text.press('ArrowLeft'); await text.press('Shift+ArrowRight');
+    expect(await text.evaluate((node: HTMLTextAreaElement) => node.value.slice(node.selectionStart, node.selectionEnd))).toBe('.');
+    await expect.poll(() => f.arena.execute('arena.sync_context', f.credentials.agent,
+      { ...f.scope, branch_id: f.created.branch_id }).state.selection?.text).toBe('.');
+    expect(f.arena.execute('arena.open_artifact', f.credentials.agent, { ...f.scope, branch_id: f.created.branch_id }).artifact.text).toBe('Uma ideia abre uma conversa.');
+  } finally { await viewer.close(); f.arena.close(); }
+});
+
+test('notepad shows only editable current proposal and automatically persists native cursor selection and clearing', async ({ page }) => {
   const f = fixture(); const viewer = await startHttpServer({ arena: f.arena, workspace_id: f.credentials.workspace_id, port: 0 });
   try {
     await login(page, `${viewer.url}/?branch_id=${f.created.branch_id}`, f.credentials.owner_token);
     const text = page.getByRole('textbox', { name: 'Texto da proposta' }); await expect(text).toHaveValue('Uma ideia abre uma conversa.');
     await expect(page.getByRole('button')).toHaveCount(0); await expect(page.locator('select,details,input')).toHaveCount(0);
-    await expect(text).toHaveAttribute('readonly', ''); await text.dblclick({ position: { x: 65, y: 20 } });
+    await expect(text).toBeEditable(); await text.dblclick({ position: { x: 65, y: 20 } });
     expect(await text.evaluate((node: HTMLTextAreaElement) => ({ start: node.selectionStart, end: node.selectionEnd, text: node.value.slice(node.selectionStart, node.selectionEnd) }))).toEqual({ start: 4, end: 9, text: 'ideia' });
     const events = () => f.arena.execute('arena.read_events', f.credentials.agent, { ...f.scope, branch_id: f.created.branch_id }).events;
     await expect.poll(() => events().filter((event: any) => event.type === 'selection').length).toBe(1);
@@ -35,7 +92,7 @@ test('current proposal refresh preserves an unchanged cursor selection and clear
     const text = page.getByRole('textbox', { name: 'Texto da proposta' }); await expect(text).toHaveValue('Uma ideia abre uma conversa.'); await text.dblclick({ position: { x: 65, y: 20 } });
     const events = () => f.arena.execute('arena.read_events', f.credentials.agent, { ...f.scope, branch_id: f.created.branch_id }).events;
     await expect.poll(() => events().at(-1).type).toBe('selection');
-    await page.waitForResponse(response => response.url().endsWith('/api/call') && response.request().postDataJSON()?.operation === 'arena.open_artifact');
+    await page.waitForResponse(response => response.url().endsWith('/api/call') && response.request().postDataJSON()?.operation === 'arena.sync_context');
     expect(await text.evaluate((node: HTMLTextAreaElement) => node.value.slice(node.selectionStart, node.selectionEnd))).toBe('ideia');
     const next = f.arena.execute('arena.submit_proposal', f.credentials.agent, { ...f.scope, branch_id: f.created.branch_id, expected_revision: f.base.revision_id, base_revision_id: f.base.revision_id, changes: { text: 'Uma pergunta dá início ao próximo texto.' }, source_ids: [], rationale: 'Outra proposta fictícia', idempotency_key: 'next' });
     await expect(text).toHaveValue('Uma pergunta dá início ao próximo texto.'); await expect.poll(() => events().at(-1).type).toBe('selection_clear'); expect(events().at(-1).proposal_id).toBe(next.proposal_id);
@@ -70,7 +127,7 @@ test('a delayed refresh cannot replace a newer artifact delivered by the host', 
     await page.clock.install({ time: frozen }); await page.clock.pauseAt(frozen);
     await page.exposeFunction('fixtureCall', async (operation: string, input: any) => {
       const result = f.arena.execute(operation, f.credentials.agent, { ...f.scope, ...input });
-      if (operation === 'arena.open_artifact' && !refreshStarted) { refreshStarted = true; await held; }
+      if (operation === 'arena.sync_context' && !refreshStarted) { refreshStarted = true; await held; }
       return result;
     });
     const context = f.arena.execute('arena.open_artifact', f.credentials.agent, { ...f.scope, branch_id: f.created.branch_id });

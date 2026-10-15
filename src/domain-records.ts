@@ -57,10 +57,15 @@ export interface ProfileDecision extends Entity, Authored, Provenance {
   profile_revision_id: string; comment: string;
 }
 export interface PassageSelection { start: number; end: number; text: string }
+export interface ProductionDna extends Entity, Authored, Provenance {
+  branch_id: string; version: number; text: string; previous_id: string | null;
+}
 export interface ArtifactEvent extends Entity, Authored, Provenance {
   event_id: string; artifact_id: string; branch_id: string; revision_id: string; type: string; operation: string;
   dimension?: string; selection?: PassageSelection | null; proposal_id?: string; presented_version?: number;
   comment?: string; ui_origin?: 'unverified' | 'authenticated_human_channel'; session_id?: string | null;
+  patch?: { start: number; end: number; text: string }; before_artifact_id?: string;
+  surface?: 'text' | 'dna'; dna_id?: string; dna_version?: number;
   references?: Record<string, string | number>; human_decision?: string | null;
 }
 export interface EventCheckpoint extends Entity {
@@ -77,6 +82,6 @@ export interface RecordRegistry {
   exploration: Exploration; branch: Branch; revision: Revision; proposal: Proposal; source: Source; session: Session;
   feedback: Feedback; decision: Decision; profile: Profile; profile_revision: ProfileRevision;
   profile_proposal: ProfileProposal; profile_decision: ProfileDecision; event: ArtifactEvent;
-  event_checkpoint: EventCheckpoint; adapter: Adapter; snapshot: Snapshot;
+  event_checkpoint: EventCheckpoint; adapter: Adapter; snapshot: Snapshot; production_dna: ProductionDna;
 }
 export type RecordType = keyof RecordRegistry;
