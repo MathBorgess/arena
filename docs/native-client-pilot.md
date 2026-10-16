@@ -1,5 +1,7 @@
 # Piloto nos clientes nativos
 
+> Piloto em andamento no Codex: ver [registro humano](ux-validation.md) e [ADR 0004](adr/0004-editable-notepad.md). A seleção e revisão reais motivaram novo contrato: bloco editável, DNA e deltas. O roteiro somente leitura abaixo é histórico; a nova etapa exige observar o proprietário digitando, recuperando sua edição por `arena:contexto`, editando o DNA e decidindo pela conversa. Não confundir as duas revisões.
+
 Estado inicial: **não executado nos clientes reais**. O piloto exige os clientes autenticados do proprietário. A implementação não iniciou modelos, alterou configurações pessoais ou consumiu assinatura/API. Qualidade editorial é julgada por humanos, separadamente dos testes técnicos.
 
 ## Evidência técnica e de cliente real
