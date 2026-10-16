@@ -4,15 +4,19 @@ O pedido atual autoriza criar o repositório e implementar a spec. Ele sucede as
 
 ## Escolhas concretas
 
-- Repositório proposto: MathBorgess/arena; integrado ao ai-tools-catalog por PR, sem merge.
+- Repositório criado: MathBorgess/arena; integrado ao ai-tools-catalog por PR, sem merge.
 - Piloto local privado, dados fictícios, Node.js 24 + TypeScript + SQLite. A publicidade do código não torna público o workspace.
-- Interface web em português; os clientes Codex e Claude continuam externos e usam MCP stdio.
+- Toda conversa permanece no harness escolhido pelo autor. A Arena oferece um MCP e um visualizador compacto de artefatos em português, empacotáveis com uma skill em um plugin.
+- Orientação final do proprietário: o visualizador mostra apenas o texto da proposta atual, em leitura, com seleção nativa pelo cursor. A seleção persiste automaticamente com proposta, versão, revisão-base e offsets. Não há painéis, comentários, edição, comparação, aceite, navegação ou botões de fluxo no visualizador. Toda solicitação e coordenação permanece na conversa e nas skills/comandos do harness.
+- O humano comunica aceite, rejeição, edição e outras decisões na conversa. Em harnesses com execução local (Codex e ChatGPT Work), a skill utiliza um canal CLI humano separado, com credencial privada lida pelo processo, após instrução explícita do usuário sobre a versão apresentada. O MCP de agente continua sem autorização humana. Clientes exclusivamente MCP mantêm decisões pendentes até existir um canal humano autorizado; não simular autorização nem exigir controles editoriais no visualizador.
+- Usar MCP Apps para exibição embutida quando o harness anunciar e suportar essa extensão. Para clientes sem renderização verificada, oferecer um painel local do mesmo artefato, aberto sob demanda. Prioridades confirmadas: Codex e ChatGPT. ChatGPT recebe MCP Apps quando disponível; Codex usa MCP e visualizador local, sem presumir renderização embutida. Claude fica como extensão posterior.
+- Interações relevantes no artefato produzem eventos persistidos com ID, revisão, seleção e autoria. O agente recupera esses eventos e a revisão atual pelo MCP; em hosts compatíveis, a interface também atualiza o contexto via MCP Apps. Essa atualização não inicia automaticamente uma execução do agente.
 - Nenhuma marca ou rede é presumida. Importação real por arquivo JSON/CSV de textos fornecido pelo usuário, com origem, direitos, seleção e cobertura explicitados. Integrações nativas de redes são indisponíveis nesta entrega.
-- Fronteiras de teste propostas: API pública do domínio e MCP, mais revisão e comparação na interface humana. Aguardando confirmação antes de escrever testes.
+- Fronteiras de teste propostas, ajustadas à visualização de artefatos: API pública do domínio/MCP e interação no componente visual (seleção/comentário/edição → evento persistido → contexto recebido pelo agente). Fronteiras explicitamente confirmadas pelo proprietário em 14/10/2026: “Confirmo MCP e interação no artefato”.
 - Configuração das ferramentas nativas é documentada; não modificar a configuração pessoal do proprietário.
 
 ## Evidência e limites
 
-A suíte técnica usa dados fictícios, SQLite real e clientes MCP do SDK. Essa evidência verifica contratos, não prova participação real do Codex ou Claude. A passagem entre os dois clientes e o julgamento editorial humano são critérios de piloto pendentes até execução nos clientes reais.
+O domínio durável, MCP, CLI e visualizador mínimo estão integrados e validados tecnicamente. Check e build passaram, assim como 42 testes Node e 8 testes Chromium. O pacote compilado expôs 15 ferramentas, abriu a proposta, persistiu seleção, serviu o recurso UI e executou uma decisão pelo canal humano CLI. A suíte usa dados fictícios, SQLite real, clientes MCP do SDK e um host AppBridge de referência. Resultados e correções estão em `docs/acceptance.md` e `docs/review.md`. Essa evidência verifica contratos, sem provar participação real do Codex ou ChatGPT. Renderização no harness, passagem Codex → ChatGPT e julgamento editorial humano são critérios de piloto pendentes até execução nos clientes reais, rastreados na issue #8.
 
 O pacote portátil distingue fontes, inferências, propostas e decisões e não inclui credenciais. Fontes revogadas não podem ser relidas nem exportadas. A política de remoção inclui originais locais, conteúdo derivado controlado e índices; cópias previamente exportadas e backups administrados pelo usuário não podem ser recolhidos pelo produto.

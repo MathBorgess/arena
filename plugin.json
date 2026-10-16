@@ -1,0 +1,21 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "arena",
+  "version": "0.1.0",
+  "description": "Revise textos persistentes na conversa do Codex e ChatGPT, com seleção de trechos no visualizador.",
+  "author": { "name": "Matheus Borges", "url": "https://github.com/MathBorgess" },
+  "repository": "https://github.com/MathBorgess/arena",
+  "keywords": ["editorial", "artifacts", "mcp"],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Arena",
+        "shortDescription": "Explore e revise textos com contexto persistente",
+        "longDescription": "Leia e selecione o texto atual no visualizador; inicie, revise, compare, ramifique e decida propostas pela skill Arena na conversa.",
+        "developerName": "Matheus Borges",
+        "category": "Productivity",
+        "capabilities": ["Read", "Write"]
+      }
+    }
+  }
+}

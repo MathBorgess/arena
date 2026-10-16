@@ -5,13 +5,14 @@ export const dimensions: Dimension[] = ['niche', 'audience', 'theme', 'thesis', 
 export const agentOperations = [
   'arena.list_work', 'arena.read_context', 'arena.read_source', 'arena.create_exploration',
   'arena.create_branch', 'arena.submit_proposal', 'arena.add_feedback', 'arena.compare_branches',
-  'arena.propose_profile_change', 'arena.export_context', 'arena.get_operation', 'arena.list_profiles'
+  'arena.propose_profile_change', 'arena.export_context', 'arena.get_operation', 'arena.list_profiles',
+  'arena.open_artifact', 'arena.read_events', 'arena.record_interaction'
 ] as const;
 export const humanOperations = [
   'human.decide_proposal', 'human.edit_branch', 'human.set_locks', 'human.create_profile',
   'human.approve_profile', 'human.import_sources', 'human.revoke_source', 'human.remove_source',
   'human.invite_member', 'human.revoke_member', 'human.integration_status', 'human.record_verification',
-  'human.list_sources', 'human.review_artifacts', 'human.export_text'
+  'human.list_sources', 'human.review_artifacts', 'human.export_text', 'human.record_artifact_interaction'
 ] as const;
 export type Operation = typeof agentOperations[number] | typeof humanOperations[number];
 export type ErrorCode = 'INVALID_INPUT' | 'ACCESS_DENIED' | 'NOT_FOUND' | 'REVISION_CONFLICT' |
