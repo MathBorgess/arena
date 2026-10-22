@@ -7,7 +7,7 @@ import { createMcpServer } from '../src/mcp.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
-async function referenceHost(page: any, url: string, context: any, arena: Arena, credentials: any, capabilities: any = { serverTools: {}, updateModelContext: { text: {} }, message: { text: {} } }, hooks: { afterReadEvents?: () => Promise<void> } = {}) {
+async function referenceHost(page: any, url: string, context: any, arena: Arena, credentials: any, capabilities: any = { serverTools: {}, updateModelContext: { text: {} }, message: { text: {} } }, hooks: { afterRecord?: () => Promise<void>; beforePatch?: () => Promise<void> } = {}) {
   const server = createMcpServer(arena, credentials.agent_token, { workspace_id: credentials.workspace_id });
   const client = new Client({ name: 'reference-widget-client', version: '1.0.0' });
   const [a, b] = InMemoryTransport.createLinkedPair(); await server.connect(a); await client.connect(b);
@@ -15,8 +15,9 @@ async function referenceHost(page: any, url: string, context: any, arena: Arena,
   await page.exposeFunction('fixtureCall', async (name: string, input: any) => {
     requests.push(name);
     expect(input.workspace_id).toBe(credentials.workspace_id);
+    if (name === 'arena.patch_artifact') await hooks.beforePatch?.();
     const result = await client.callTool({ name, arguments: input });
-    if (name === 'arena.read_events') await hooks.afterReadEvents?.();
+    if (name === 'arena.record_interaction') await hooks.afterRecord?.();
     return result;
   });
   await page.exposeFunction('fixtureContext', (input: any) => { updates.push(input); return {}; });
@@ -49,9 +50,33 @@ test('native selection is automatically persisted through MCP and updates SDK ho
     await text.dblclick({ position: { x: 65, y: 20 } }); await expect.poll(() => host!.updates.length).toBe(1);
     expect(host.updates[0].structuredContent).toMatchObject({ branch_id: created.branch_id, revision_id: created.revision_id, proposal_id: proposal.proposal_id, presented_version: 1, selection: { start: 4, end: 9, text: 'ideia' }, author: credentials.agent, ui_origin: 'unverified' });
     expect(host.updates[0].structuredContent.event_cursor).toEqual(expect.any(String)); expect(host.messages).toHaveLength(0); expect(localRequests).toBe(0);
+    expect(host.requests.filter(name => name === 'arena.record_interaction')).toHaveLength(1);
+    expect(host.requests.filter(name => name === 'arena.read_events')).toHaveLength(0);
     await text.click({ position: { x: 8, y: 20 } }); await expect.poll(() => host!.updates.at(-1)?.structuredContent.action).toBe('selection_clear'); expect(host.updates.at(-1).structuredContent.selection).toBeNull(); expect(host.messages).toHaveLength(0);
     expect(arena.execute('arena.read_context', credentials.agent, { ...scope, branch_id: created.branch_id }).revision.fields.text).toBe('');
   } finally { await host?.close(); await viewer.close(); arena.close(); }
+});
+
+test('a conflicting manual draft is available to the conversation as explicitly unsaved context', async ({ page }) => {
+  const arena = new Arena(':memory:'); const credentials = arena.bootstrap({ workspace_name: 'Oficina fictícia', owner_name: 'Autora exemplo' });
+  const scope = { workspace_id: credentials.workspace_id };
+  const created = arena.execute('arena.create_exploration', credentials.agent, { ...scope, title: 'Conflito fictício', objective: 'Comparar rascunhos', idempotency_key: 'create' });
+  arena.execute('arena.submit_proposal', credentials.agent, { ...scope, branch_id: created.branch_id, expected_revision: created.revision_id, base_revision_id: created.revision_id,
+    changes: { text: 'Texto inicial.' }, source_ids: [], rationale: 'Ficção', idempotency_key: 'first' });
+  const context = arena.execute('arena.open_artifact', credentials.agent, { ...scope, branch_id: created.branch_id });
+  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; }); let writing = false;
+  const viewer = await startHttpServer({ arena, workspace_id: credentials.workspace_id, port: 0 }); let host;
+  try {
+    host = await referenceHost(page, viewer.url, context, arena, credentials, undefined, { beforePatch: async () => { writing = true; await held; } });
+    const text = host.frame.getByRole('textbox', { name: 'Texto da proposta' });
+    await text.fill('Meu rascunho humano.'); await expect.poll(() => writing).toBe(true);
+    arena.execute('arena.submit_proposal', credentials.agent, { ...scope, branch_id: created.branch_id, expected_revision: created.revision_id, base_revision_id: created.revision_id,
+      changes: { text: 'Alternativa remota.' }, source_ids: [], rationale: 'Ficção', idempotency_key: 'remote' });
+    release();
+    await expect.poll(() => host!.updates.find(u => u.structuredContent.action === 'edit_conflict')?.structuredContent.local_draft).toBe('Meu rascunho humano.');
+    expect(host.updates.find(u => u.structuredContent.action === 'edit_conflict').structuredContent.persisted).toBe(false);
+    await expect(text).toHaveValue('Meu rascunho humano.'); expect(host.messages).toHaveLength(0);
+  } finally { release(); await host?.close(); await viewer.close(); arena.close(); }
 });
 
 
@@ -72,7 +97,7 @@ test('restriction updates automatically clear embedded proposal text and the lat
 });
 
 
-test('an event read finishing after revocation never restores a restricted selection to model context', async ({ page }) => {
+test('a selection acknowledgement finishing after revocation never restores a restricted selection to model context', async ({ page }) => {
   const arena = new Arena(':memory:'); const credentials = arena.bootstrap({ workspace_name: 'Oficina fictícia', owner_name: 'Autora exemplo' });
   const scope = { workspace_id: credentials.workspace_id };
   const source = arena.execute('human.import_sources', credentials.owner, { ...scope, format: 'json', content: JSON.stringify([{ text: 'Referência fictícia.' }]), origin: 'Arquivo fictício', rights: 'Autorizado', usage_scope: 'Arena', coverage: 'Amostra', idempotency_key: 'source' }).source_ids[0];
@@ -83,7 +108,7 @@ test('an event read finishing after revocation never restores a restricted selec
   const viewer = await startHttpServer({ arena, workspace_id: credentials.workspace_id, port: 0 }); let host;
   try {
     host = await referenceHost(page, viewer.url, context, arena, credentials, undefined,
-      { afterReadEvents: async () => { eventReadStarted = true; await held; } });
+      { afterRecord: async () => { eventReadStarted = true; await held; } });
     const text = host.frame.getByRole('textbox', { name: 'Texto da proposta' });
     await expect(text).toHaveValue('Uma ideia usa a referência.'); await text.dblclick({ position: { x: 65, y: 20 } });
     await expect.poll(() => eventReadStarted).toBe(true);

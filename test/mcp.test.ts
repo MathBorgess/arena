@@ -43,6 +43,16 @@ test('a scoped MCP client discovers editorial tools and resumes its persisted ex
   assert.equal(proposal.isError, undefined);
   const resumed = await client.callTool({ name: 'arena.read_context', arguments: { branch_id: ids.branch_id } });
   assert.ok((resumed.structuredContent as any).sessions.some((session: any) => session.id === (proposal.structuredContent as any).session_id));
+  const preload = await client.callTool({ name: 'arena.sync_context', arguments: { branch_id: ids.branch_id } });
+  assert.equal(preload.isError, undefined);
+  const synced = preload.structuredContent as any;
+  const patched = await client.callTool({ name: 'arena.patch_artifact', arguments: { branch_id: ids.branch_id,
+    expected_revision: ids.revision_id, artifact_id: ids.revision_id, presented_version: 0,
+    sync_cursor: synced.sync_cursor, patch: { start: 0, end: 0, text: 'Rascunho fictício editável.' },
+    rationale: 'Conferir o contrato incremental MCP.', idempotency_key: 'mcp-patch' } });
+  assert.equal(patched.isError, undefined);
+  assert.equal((patched.structuredContent as any).sync.mode, 'delta');
+  assert.equal((patched.structuredContent as any).status, 'pending');
 });
 
 test('loopback HTTP MCP requires an agent bearer token and preserves the same domain behavior across requests', async t => {

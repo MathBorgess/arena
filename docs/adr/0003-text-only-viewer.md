@@ -2,6 +2,8 @@
 
 Status: accepted. Latest owner direction on 2026-10-14 supersedes the review controls in ADR 0002 and ticket 03.
 
+> Superseded on 2026-10-14 by [ADR 0004](0004-editable-notepad.md): the native pilot owner requested direct editing, production DNA and incremental context. Independent human CLI authorization remains applicable. The original direction below is retained as historical rationale.
+
 The viewer has one read-only text surface: the current pending text proposal, falling back to accepted text when no pending text proposal exists. It has no editorial navigation, chat, comment input, editing, comparison, acceptance, source or voice drawers, or request buttons. Setup authentication and transient errors are allowed only when needed to open the artifact.
 
 Native cursor selection automatically records the exact branch, base revision, proposal ID/version when applicable, UTF16 offsets and text. Empty selection clears the prior passage context. Selection alone never sends a user message or starts an agent turn. MCP Apps updates model context where supported; local fallback records events for the skill to retrieve at the next user message. New persisted proposals refresh the displayed text. Restriction changes clear controlled text and selection, including historical snapshots.

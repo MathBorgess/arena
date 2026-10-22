@@ -1,5 +1,7 @@
 # Arena v1: notas da execução
 
+> Atualização de direção durante o piloto humano em 2026-10-14: [ADR 0004](../adr/0004-editable-notepad.md) substitui o visualizador somente leitura por bloco editável, DNA da produção e contexto incremental. As decisões originais abaixo descrevem a implementação anterior e sua evidência técnica.
+
 O pedido atual autoriza criar o repositório e implementar a spec. Ele sucede as restrições da sessão preparatória que diziam para ainda não implementar. Merge, implantação, contas reais e publicação social continuam fora desta execução.
 
 ## Escolhas concretas

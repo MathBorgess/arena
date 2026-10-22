@@ -9,13 +9,13 @@ const viewer = mountArena({
   async call(operation, input) {
     if (!app.getHostCapabilities()?.serverTools) throw new Error('O host não permite registrar a seleção do artefato.');
     const result = await app.callServerTool({ name: operation, arguments: { ...input, workspace_id: workspaceId } });
-    if (result.isError) { const failure = result.structuredContent?.error; const error = new Error(failure?.message ?? 'Artefato indisponível.'); error.code = failure?.code; throw error; }
+    if (result.isError) { const failure = result.structuredContent?.error; const error = new Error(failure?.message ?? 'Artefato indisponível.'); error.code = failure?.code; error.references = failure?.references; throw error; }
     if (result.structuredContent) return result.structuredContent;
     const text = result.content?.find(item => item.type === 'text'); if (!text) throw new Error('Texto do artefato indisponível.'); return JSON.parse(text.text);
   },
   async onContext(context) {
     if (!app.getHostCapabilities()?.updateModelContext?.text) return;
-    await app.updateModelContext({ structuredContent: context, content: [{ type: 'text', text: `Seleção de referência da Arena: ${JSON.stringify(context)}. A seleção não solicita outra resposta nem concede aceite humano.` }] });
+    await app.updateModelContext({ structuredContent: context, content: [{ type: 'text', text: `Contexto incremental da Arena: ${JSON.stringify(context)}. Escrita e seleção são contexto, não iniciam resposta nem concedem aceite. Reutilize a base e aplique somente os patches novos.` }] });
   }
 });
 app.ontoolinput = params => { toolInput = params.arguments; };

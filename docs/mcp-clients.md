@@ -1,5 +1,7 @@
 # Arena nos clientes Codex e ChatGPT
 
+> Direção vigente do piloto: [ADR 0004](adr/0004-editable-notepad.md). O bloco atual aceita escrita direta; mudanças viram rascunhos pendentes. Use `arena:contexto` para inspecionar nuances, `arena:dna` para editar a base e `arena:texto` para voltar. `arena.sync_context` pré-carrega uma vez e depois retorna deltas; não encadear leituras completas a cada pedido. “Aprovado” sobre uma versão apresentada clara aciona o CLI humano separado, sem confirmação genérica. As referências a somente leitura abaixo documentam a entrega anterior. Prefira o bloco nativo já aberto; o login HTTP é apenas fallback.
+
 A Arena mantém o contexto editorial em SQLite local. A conversa continua no cliente escolhido; o MCP lê contexto e registra propostas. O visualizador mostra somente o texto atual e permite seleção nativa pelo cursor. Revisão, comparação e demais ações acontecem na conversa pela skill Arena. Decisões humanas usam um canal CLI local independente, quando o harness pode executar comandos; o token de agente do widget não recebe essas permissões.
 
 Os exemplos abaixo são instruções para a máquina do proprietário. Esta implementação não altera configurações pessoais, inicia modelos, conecta redes sociais, publica o plugin ou abre túneis. Claude fica adiado. SDK e host de referência são evidência técnica; instalação e uso real de Codex/ChatGPT permanecem verificações separadas.
