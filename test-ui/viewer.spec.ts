@@ -12,6 +12,25 @@ function fixture() {
 }
 async function login(page: any, url: string, token: string) { await page.goto(url); await page.getByLabel('Credencial humana').fill(token); await page.getByRole('button', { name: 'Entrar' }).click(); }
 
+test('the notepad stays read-only until the initial artifact has loaded', async ({ page }) => {
+  const f = fixture(); const viewer = await startHttpServer({ arena: f.arena, workspace_id: f.credentials.workspace_id, port: 0 });
+  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; });
+  try {
+    await page.route('**/api/call', async route => {
+      if (route.request().postDataJSON()?.operation === 'arena.open_artifact') await held;
+      await route.continue();
+    });
+    await login(page, `${viewer.url}/?branch_id=${f.created.branch_id}`, f.credentials.owner_token);
+    const text = page.getByRole('textbox', { name: 'Texto da proposta' });
+    await expect(text).toBeVisible(); await expect(text).not.toBeEditable();
+    release();
+    await expect(text).toHaveValue('Uma ideia abre uma conversa.'); await expect(text).toBeEditable();
+    await text.fill('Texto após carregar.');
+    await expect.poll(() => f.arena.execute('arena.open_artifact', f.credentials.agent,
+      { ...f.scope, branch_id: f.created.branch_id }).artifact.text).toBe('Texto após carregar.');
+  } finally { release(); await viewer.close(); f.arena.close(); }
+});
+
 test('typing directly in the notepad autosaves a pending patch and makes the manual edit available to the agent', async ({ page }) => {
   const f = fixture(); const viewer = await startHttpServer({ arena: f.arena, workspace_id: f.credentials.workspace_id, port: 0 });
   try {

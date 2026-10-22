@@ -11,9 +11,9 @@ const artifactReference = artifact => ({ branch_id: artifact.branch_id, revision
   ...(artifact.proposal_id ? { proposal_id: artifact.proposal_id, presented_version: artifact.presented_version } : {}) });
 const identity = artifact => JSON.stringify([artifactReference(artifact), artifact.dna_id, artifact.dna_version, artifact.text, artifact.redacted ?? false]);
 
-/** A read-only text surface. Every editorial request stays in the harness. */
+/** An editable notepad. Editorial commands stay in the harness. */
 export function mountArena({ call, onContext, mode = 'local', root = document.getElementById('arena') }) {
-  const text = element('textarea', { spellcheck: false, 'aria-label': 'Texto da proposta', placeholder: 'Escreva aqui ou peça um texto na conversa.' });
+  const text = element('textarea', { spellcheck: false, readOnly: true, 'aria-label': 'Texto da proposta', placeholder: 'Escreva aqui ou peça um texto na conversa.' });
   const status = element('p', { role: 'status', hidden: true, 'aria-live': 'polite' });
   root.replaceChildren(text, status);
   let current, parameters, lastSeen = 'null', timer, saveTimer, applying = false, stopped = false;
@@ -129,7 +129,7 @@ export function mountArena({ call, onContext, mode = 'local', root = document.ge
   for (const event of ['select', 'mouseup', 'keyup']) text.addEventListener(event, selectionChanged);
   function clear() {
     generation++;
-    const previous = current?.artifact; clearTimeout(timer); clearTimeout(saveTimer); current = undefined;
+    const previous = current?.artifact; clearTimeout(timer); clearTimeout(saveTimer); current = undefined; text.readOnly = true;
     dirty = false; conflicted = false; applying = true; text.value = ''; text.setSelectionRange(0, 0); lastSeen = 'null'; applying = false;
     if (previous) void contextSnapshot({ ...reference(previous), selection: null, action: 'selection_clear', persisted: false }).catch(() => {});
   }
